@@ -9,7 +9,7 @@ kind: "package-library"
 
 ## 概述
 
-`dsh-subagent-in-process-driver` 是两个进程内 subagent 后端共用的运行驱动器：它通过宿主的 agent 工厂创建一个子 agent，应用按子 agent 的定制，把一项任务驱动到完成，并以单一完全停稳的 dispose（资源释放）路径返回子 agent 自身的最终输出。spawn 调用它时不传入会话初始内容；fork 调用它时传入父级已完成轮次的前缀。它是库而非独立功能：提供方后端调用 `startInProcessRun`，组合中没有任何东西配置它。阅读本页可理解两个进程内后端共享的运行生命周期。
+`dsh-subagent-in-process-driver` 是两个进程内 subagent 后端共用的运行驱动器：它通过宿主的 agent 工厂创建一个子 agent，应用按子 agent 的定制，把一项任务驱动到完成，并以单一完全停稳的 dispose（资源释放）路径返回子 agent 自身的最终输出。spawn 调用它时不传入会话初始内容；fork 调用它时传入父级已提交历史的快照。它是库而非独立功能：提供方后端调用 `startInProcessRun`，组合中没有任何东西配置它。阅读本页可理解两个进程内后端共享的运行生命周期。
 
 ## 目录
 
@@ -33,7 +33,7 @@ kind: "package-library"
 
 ### 唯一输入
 
-`InProcessRunOptions` 的形态为 `{ seed?: SessionEvent[] }`——fork 的已配平父级事件初始内容。spawn 省略该值；fork 提供已完成轮次前缀并记录其长度，使结果读取器不会把作为初始内容的父级消息误认为子 agent 输出。
+`InProcessRunOptions.seed` 接受 `SessionForkSeed`，包含已配平事件及其精确继承前缀长度。spawn 省略该值。fork 提供父级已提交历史及仅属于子会话的闭合记录；结果收集排除整个 seed，而谱系仅包含真实父前缀。
 
 ### 子 agent 获得什么
 

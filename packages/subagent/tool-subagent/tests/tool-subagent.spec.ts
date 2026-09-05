@@ -459,7 +459,9 @@ describe('dsh-tool-subagent', () => {
     expect(schema.description).not.toContain('does not see this conversation')
     expect(schema.description).not.toContain('can prevent provider-side reuse of the inherited conversation prefix')
     const props = (schema.parameters as { properties: Record<string, { description: string }> }).properties
-    expect(props['prompt']!.description).toContain('completed turns')
+    expect(props['prompt']!.description).toContain('including the current turn')
+    expect(schema.description).toContain('current turn\'s reasoning and completed tool results')
+    expect(schema.description).toContain('Pending tool execution stays with you')
   })
 
   it('disposes the run on the success path (no leaked child)', async () => {

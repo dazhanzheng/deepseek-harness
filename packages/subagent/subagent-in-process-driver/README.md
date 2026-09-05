@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-subagent-in-process-driver` is the shared run driver behind the two in-process subagent backends: it creates one child agent through the host's agent factory, applies per-child customization, drives one task to completion, and returns the child's own final output with a single quiescent disposal path. Spawn calls it with no session seed; fork calls it with the parent's completed-turn prefix. It is a library, not a standalone feature: provider backends call `startInProcessRun`, and nothing in a composition configures it. Read this page to understand the run lifecycle both in-process backends share.
+`dsh-subagent-in-process-driver` is the shared run driver behind the two in-process subagent backends: it creates one child agent through the host's agent factory, applies per-child customization, drives one task to completion, and returns the child's own final output with a single quiescent disposal path. Spawn calls it with no session seed; fork calls it with a snapshot of the parent's committed history. It is a library, not a standalone feature: provider backends call `startInProcessRun`, and nothing in a composition configures it. Read this page to understand the run lifecycle both in-process backends share.
 
 ## Table of Contents
 
@@ -33,7 +33,7 @@ One call starts and drives one one-shot child. Fulfillment means the child is al
 
 ### The one input
 
-`InProcessRunOptions` is `{ seed?: SessionEvent[] }` — a fork seed of balanced parent events. Spawn omits it; fork supplies the completed-turn prefix and records its length so the result reader never mistakes seeded parent messages for child output.
+`InProcessRunOptions.seed` accepts a `SessionForkSeed` containing balanced events and their exact inherited-prefix length. Spawn omits it. Fork supplies the parent's committed history plus child-only closing records; result collection excludes the entire seed, while lineage retains only the actual parent prefix.
 
 ### What the child gets
 

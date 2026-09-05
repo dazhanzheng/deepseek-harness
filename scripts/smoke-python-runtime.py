@@ -361,6 +361,7 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
         message_text(latest.get("content")),
     )
     if prompt == SNAPSHOT_DIRECT_CHILD_PROMPT:
+        assert_fork_context(messages)
         return text_chunks("DIRECT_CHILD_OK")
     if prompt == SNAPSHOT_WORKFLOW_CHILD_PROMPT:
         return text_chunks("WORKFLOW_CHILD_OK")
@@ -682,6 +683,26 @@ def advertised_tool_names(body: dict[str, object]) -> set[str]:
         if isinstance(function, dict) and isinstance(function.get("name"), str):
             names.add(function["name"])
     return names
+
+
+def assert_fork_context(messages: list[object]) -> None:
+    """Require the fork's first request to include its parent's open turn."""
+    if not any(
+        isinstance(message, dict)
+        and message.get("role") == "user"
+        and message_text(message.get("content")) == SNAPSHOT_PROMPT
+        for message in messages
+    ):
+        raise AssertionError("fork request omitted the parent's current user prompt")
+    results = {
+        message.get("tool_call_id"): message_text(message.get("content"))
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "tool"
+    }
+    if "42" not in results.get("advanced-code", ""):
+        raise AssertionError("fork request omitted the parent's completed tool result")
+    if "The parent retains responsibility for it" not in results.get("advanced-direct-child", ""):
+        raise AssertionError("fork request has no closure for the parent's pending delegation")
 
 
 def assert_advertised_tool(body: dict[str, object], expected: str) -> None:
@@ -1178,13 +1199,16 @@ def smoke_sdk_snapshot(base_url: str, executable: Path, update_snapshots: bool) 
         dsh_home = root / "home"
         sessions = dsh_home / "sessions"
         patch = write_advanced_profile_patch(root, "snapshot.patch.yml", sessions)
+        fork_patch = write_profile_patch(root, "fork.patch.yml", sessions, [
+            {"id": "tool-subagent", "config": {"provider": "fork"}},
+        ])
         with DeepSeekHarness(
             provider="deepseek-official",
             model="smoke-model",
             cwd=str(root),
             dsh_bin=str(executable),
             dsh_home=str(dsh_home),
-            patches=(str(patch),),
+            patches=(str(patch), str(fork_patch)),
             env={
                 "DSH_PERMISSION_MODE": "danger-full-access",
                 "DSH_TELEMETRY_DISABLED": "1",
@@ -1211,6 +1235,33 @@ def smoke_sdk_snapshot(base_url: str, executable: Path, update_snapshots: bool) 
             raise AssertionError("first advanced child log has no direct-subagent result")
         if "WORKFLOW_CHILD_OK" not in render_jsonl(logs[child_ids[1]]):
             raise AssertionError("second advanced child log has no workflow-subagent result")
+        parent_events = logs[SNAPSHOT_SESSION_ID]
+        fork_events = logs[child_ids[0]]
+        for events, expected_reasons in (
+            (parent_events, ["completed"]),
+            (fork_events, ["forked", "completed"]),
+        ):
+            reasons = [
+                event["data"]["reason"]["kind"]
+                for event in events if event.get("type") == "turn/end"
+            ]
+            if reasons != expected_reasons:
+                raise AssertionError(f"unexpected fork lifecycle: {reasons}, expected {expected_reasons}")
+        child_calls = [event for event in fork_events if event.get("type") == "tool/call"]
+        parent_calls = [event for event in parent_events if event.get("type") == "tool/call"]
+        inherited_count = next(
+            index for index, event in enumerate(parent_calls)
+            if event["data"]["callId"] == "advanced-direct-child"
+        ) + 1
+        if child_calls != parent_calls[:inherited_count]:
+            raise AssertionError("fork child repeated or changed its inherited parent tool calls")
+        closures = [
+            event for event in fork_events
+            if event.get("type") == "tool/result"
+            and event.get("data", {}).get("error", {}).get("code") == "TOOL_EXECUTION_NOT_INHERITED"
+        ]
+        if len(closures) != 1:
+            raise AssertionError(f"fork child expected one unexecuted delegation closure: {closures}")
 
         files = build_snapshot_files(result, logs, child_ids, root)
         compare_snapshot_files(
@@ -1642,7 +1693,7 @@ def snapshot_agent_id(result: "RunResult", child_id: str) -> str:
         payload = notification.payload
         if payload.get("childSessionId") != child_id:
             continue
-        if payload.get("provider") != "spawn" or payload.get("status") != "ok":
+        if payload.get("provider") not in {"spawn", "fork"} or payload.get("status") != "ok":
             raise AssertionError(f"advanced child did not finish successfully: {payload}")
         agent_id = payload.get("agentId")
         if isinstance(agent_id, str):

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-subagent-spawn-in-process` 是一个进程内 subagent 后端：它在当前进程中运行每个委派任务，子 agent（智能体）是一个全新子 `Agent`，复用宿主的 agent 工厂及 LLM（大语言模型）/工具服务。子 agent 以空对话开始，因此任务提示词必须自足；除非 `request.agentOptions` 覆盖，否则它继承父 agent 的工作目录、会话谱系、提供方、模型、推理等级与输出 token 上限。委派工具或 API 调用以 `spawn` 提供方名称找到它。需要成本最低的委派传输时选择它；需要子 agent 建立在父级已完成对话轮次之上时，请选择 fork 后端。
+`dsh-subagent-spawn-in-process` 是一个进程内 subagent 后端：它在当前进程中运行每个委派任务，子 agent（智能体）是一个全新子 `Agent`，复用宿主的 agent 工厂及 LLM（大语言模型）/工具服务。子 agent 以空对话开始，因此任务提示词必须自足；除非 `request.agentOptions` 覆盖，否则它继承父 agent 的工作目录、会话谱系、提供方、模型、推理等级与输出 token 上限。委派工具或 API 调用以 `spawn` 提供方名称找到它。需要成本最低的委派传输时选择它；需要子 agent 建立在父级已提交对话之上时，请选择 fork 后端。
 
 ## 目录
 
@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 何时选择
 
-当子 agent 不需要父级对话、且可以接受在本进程内运行时，选择 spawn 后端。当子 agent 必须建立在已完成父级轮次之上时——fork 后端会提供这些历史——或必须在本进程之外运行时（进程外后端提供此能力），请避免使用它。由于子 agent 默认继承父级的工作目录与 LLM 选择，自足的提示词会按原样生效。
+当子 agent 不需要父级对话、且可以接受在本进程内运行时，选择 spawn 后端。当子 agent 必须建立在已提交父级上下文之上时——fork 后端会提供这些历史——或必须在本进程之外运行时（进程外后端提供此能力），请避免使用它。由于子 agent 默认继承父级的工作目录与 LLM 选择，自足的提示词会按原样生效。
 
 ### 最小配置
 
@@ -93,7 +93,7 @@ kind: "package-reference"
 
 - [Subagent 子系统](../../../docs/subsystems/subagent.zh.md)——启动请求、结果、实时运行与提供方约定。
 - [dsh-subagent-in-process-driver](../subagent-in-process-driver/README.zh.md)——本后端调用的共享运行驱动器。
-- [dsh-subagent-fork-in-process](../subagent-fork-in-process/README.zh.md)——以已完成父级轮次作初始内容的兄弟后端。
+- [dsh-subagent-fork-in-process](../subagent-fork-in-process/README.zh.md)——以已提交父级上下文作初始内容的兄弟后端。
 - [dsh-tool-subagent](../tool-subagent/README.zh.md)——指向该提供方的面向模型委派工具。
 - [生成配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-spawn-in-process)——每个受支持配置字段及其源声明。
 
@@ -137,7 +137,7 @@ kind: "package-reference"
 
 这些限制说明何时选择该后端是错误的；它们是当前包约束。
 
-- **全新表示不含父级 transcript（文本记录）**——子 agent 继承 cwd、谱系、提供方、模型、推理等级、输出 token 上限及显式配置的 persona/工具限制，但不继承父级的任何对话；需要已完成轮次上下文时，请使用 fork 后端。
+- **全新表示不含父级 transcript（文本记录）**——子 agent 继承 cwd、谱系、提供方、模型、推理等级、输出 token 上限及显式配置的 persona/工具限制，但不继承父级的任何对话；需要已提交父级上下文时，请使用 fork 后端。
 
 <a id="dev-note"></a>
 ### 开发备注

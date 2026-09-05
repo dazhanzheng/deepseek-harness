@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-tool-subagent` 是面向模型的委派工具：它把一个已配置的 `ctx.subagents` 提供方变成 agent 可以调用来启动子 agent（智能体）的工具。更换提供方只会改变传输，不会改变执行约定，因此一个组合可以暴露多个委派工具，各自绑定不同的后端。`one-shot` 策略下，调用默认在前台等待子 agent；`continuable` 策略下，调用默认在后台启动工作，并返回模型之后可以发消息的持久化子 agent id。合适的实例还可让模型发现并选择子 agent 的 LLM 提供方、模型与推理等级。工具的描述会随子 agent 是否继承父级已完成轮次而调整，失败的运行以出错的工具结果呈现，而非部分成功。
+`dsh-tool-subagent` 是面向模型的委派工具：它把一个已配置的 `ctx.subagents` 提供方变成 agent 可以调用来启动子 agent（智能体）的工具。更换提供方只会改变传输，不会改变执行约定，因此一个组合可以暴露多个委派工具，各自绑定不同的后端。`one-shot` 策略下，调用默认在前台等待子 agent；`continuable` 策略下，调用默认在后台启动工作，并返回模型之后可以发消息的持久化子 agent id。合适的实例还可让模型发现并选择子 agent 的 LLM 提供方、模型与推理等级。工具的描述会随子 agent 是否继承父级已提交上下文而调整，失败的运行以出错的工具结果呈现，而非部分成功。
 
 ## 目录
 
@@ -92,7 +92,7 @@ kind: "package-reference"
 
 ### 随上下文变化的措辞
 
-工具描述源自 `provider.inheritsParentContext`：全新子 agent 得到「it does not see this conversation」措辞，fork 子 agent 得到「it does not see the current in-flight turn」措辞，因此模型既不会复述、也不会省略并不存在的上下文。
+工具描述源自 `provider.inheritsParentContext`：全新子 agent 需要自足的任务，而 fork 子 agent 会收到父级已提交的上下文，包括当前轮次。fork 指导将未完成的父调用保留给父级负责，只要求明确子 agent 的具体任务。
 
 ### 源码地图
 

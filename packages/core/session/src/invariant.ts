@@ -10,7 +10,7 @@ import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import type { Session, SessionEvent, SessionSeqCursor } from '@deepseek-ai/dsh-session'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { TOOL_NOT_STARTED } from './repair.ts'
+import { TOOL_EXECUTION_NOT_INHERITED, TOOL_NOT_STARTED } from './repair.ts'
 
 const PACKAGE_NAME = '@deepseek-ai/dsh-session'
 
@@ -135,7 +135,8 @@ function validateEvent(
       }
       requireOpenStep(trace, 'tool/result', event.data.turn, event.data.step, fail)
       const callId = event.data.message.source.callId
-      const syntheticNotStarted = event.data.message.content[0].isError === true && event.data.error?.code === TOOL_NOT_STARTED
+      const syntheticNotStarted = event.data.message.content[0].isError === true
+        && (event.data.error?.code === TOOL_NOT_STARTED || event.data.error?.code === TOOL_EXECUTION_NOT_INHERITED)
       if (!trace.pendingCalls.has(callId) && !syntheticNotStarted) {
         fail(`tool/result for ${callId} with no prior tool/call in this step`)
       }

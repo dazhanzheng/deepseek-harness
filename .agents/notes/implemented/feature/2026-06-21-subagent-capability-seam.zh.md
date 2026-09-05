@@ -50,7 +50,7 @@ bash seam（[能力 seam](../architecture/2026-06-13-capability-seams.zh.md)）�
 
 ### Fork 与 fresh 是独立后端，而非一个 flag
 
-全新子 agent 与 fork 子 agent 是独立的提供方，而非请求中的一个 flag。`dsh-subagent-spawn-in-process` 启动隔离的子 agent；`dsh-subagent-fork-in-process` 用一个平衡前缀初始化子 agent，该前缀仅包含已完成的父轮次。进行中的轮次被排除，因为其 subagent 调用尚无结果，无法构成有效的回放历史。
+全新子 agent 与 fork 子 agent 是独立的提供方，而非请求中的一个 flag。`dsh-subagent-spawn-in-process` 启动隔离的子 agent；`dsh-subagent-fork-in-process` 选择由 Session 提供的已提交父上下文快照。[实时 fork 决策](../architecture/2026-09-05-live-subagent-fork-snapshots.zh.md)负责仅在子级闭合未完成的继承调用和轮次。
 
 ### 子 agent 隔离与父日志
 

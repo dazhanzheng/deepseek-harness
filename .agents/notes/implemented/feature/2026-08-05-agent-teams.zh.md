@@ -26,7 +26,7 @@ Lead 必须等待所需工作后才能给出最终答案。进程 teardown 仍�
 
 Root 恢复时会把未终结 provisioning 记录与独立持久 child Session 对账。直接 parent 与 continuable descriptor 匹配，并且已经记录初始用户消息，才能证明准入成功并转为 active；缺失、损坏、provider／lineage 不匹配或缺少已准入消息都会转为 failed。creator 会在同一 Lead 日志 serializer 内重读终态；如果 recovery 在创建成功时先标记 failed，creator 会 drain child 并报告 provisioning conflict，而不是遗留孤儿。这样既无需重建从未保存在 Team 日志中的初始 prompt，也能约束插件 reload 竞争。
 
-fresh child 不继承对话。fork child 只捕获一次 Lead 已完成 turn 前缀，并保留为自己的持久 seed。当前 delegation turn 保持排除，与既有 fork provider 契约一致。
+fresh child 不继承对话。fork child 只捕获一次 Lead 已提交上下文，并保留为自己的持久 seed。[实时 fork 决策](../architecture/2026-09-05-live-subagent-fork-snapshots.zh.md)负责当前轮次继承与仅属于子级的闭合记录。
 
 ## Mailbox and task transactions
 

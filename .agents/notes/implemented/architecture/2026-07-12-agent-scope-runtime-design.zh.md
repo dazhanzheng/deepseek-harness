@@ -288,7 +288,7 @@ spawn 和 fork 共享一个进程内 driver。它通过 `parent.ctx` 创建子�
 
 提供方等待创建并仅返回已发布的 run。在交接时，核心创建分离其仅用于创建的 abort 监听器；提供方在安装活跃 run 监听器之前立即重新检查 signal，因此在那个窄窗口中的 abort 会 dispose 新句柄而非逃脱取消。父级拆除会一并拆除子级，因为操作属于 `parent.ctx`；提供方卸载阻止新 start 但不成为已接受 run 的第二个撤销所有者。Run disposer 取消子级并等待 AgentHandle 的有序拆除。
 
-spawn 使用空会话种子。fork 使用经验证的已完成轮次前缀。对话种子仅改变历史，不导入作用域、工具、服务或权限。
+spawn 使用空会话种子。fork 使用由 Session 提供的已提交上下文快照，其中包含仅属于子级的闭合记录。对话种子仅改变历史，不导入作用域、工具、服务或权限。
 
 ### ACP（Agent Client Protocol）提供方拥有进程直到就绪或清理
 

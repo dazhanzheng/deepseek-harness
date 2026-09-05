@@ -51,6 +51,7 @@ import {
   type RunResult,
   type SdkPromptContentBlock,
 } from '@deepseek-ai/dsh-sdk-client'
+import { parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
 
 const corpusRoot = fileURLToPath(new URL('../', import.meta.url))
 
@@ -89,6 +90,8 @@ function dirOf(url: string): string {
 }
 
 interface SdkAssertions {
+  /** In-flight fork seeds retain the parent's committed current turn. */
+  liveFork?: boolean
   /** Environment overrides passed to the runtime subprocess. */
   environment?: Readonly<Record<string, string>>
   /** A separate DSH SDK child whose persisted session joins the evidence. */
@@ -109,6 +112,8 @@ interface SdkAssertions {
 }
 
 const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
+  'subagent-fork-in-process': { liveFork: true },
+  'subagent-mixed': { liveFork: true },
   'subagent-dsh-sdk-diagnostic': {
     environment: { DSH_TEST_CHILD_PATCH: dshSdkDiagnosticChildPatch },
   },
@@ -625,6 +630,32 @@ function orderLogs(logs: PersistedLog[], expectedCount: number, separateDshSdkCh
   return [...parents, ...children]
 }
 
+/** Prove that fork inherits the open parent turn without executing its pending calls. */
+function verifyLiveFork(logs: readonly PersistedLog[]): void {
+  const parent = logs[0]
+  if (parent === undefined) throw new Error('fork scenario has no parent session')
+  const parentEvents = parseSessionLog(parent.content)
+  const forkCall = parentEvents.find(event => event.type === 'tool/call' && event.data.name === 'subagent_fork')
+  if (forkCall?.type !== 'tool/call') throw new Error('fork scenario has no delegation call')
+  const child = logs.find(log => typeof log.header.seedLength === 'number')
+  if (child === undefined) throw new Error('fork scenario has no seeded child')
+  const inheritedCount = child.header.seedLength
+  if (typeof inheritedCount !== 'number') throw new Error('fork child has no inherited event count')
+  const childEvents = parseSessionLog(child.content)
+  const inherited = childEvents.slice(0, inheritedCount)
+  expect(inherited).toEqual(parentEvents.slice(0, inheritedCount))
+  expect(inherited).toContainEqual(forkCall)
+  expect(parentEvents.filter(event => event.type === 'turn/end' && event.data.reason.kind === 'forked')).toEqual([])
+  const ownEvents = childEvents.slice(inheritedCount)
+  expect(ownEvents.filter(event => event.type === 'turn/end' && event.data.reason.kind === 'forked')).toHaveLength(1)
+  expect(ownEvents.some(event => event.type === 'tool/result'
+    && event.data.message.content.some(block => block.type === 'tool-result'
+      && block.toolCallId === forkCall.data.callId))).toBe(true)
+  const parentCallIds = new Set(inherited.flatMap(event => event.type === 'tool/call' ? [event.data.callId] : []))
+  expect(ownEvents.filter(event => event.type === 'tool/call' && parentCallIds.has(event.data.callId))).toEqual([])
+  expect(parentEvents.at(-1)).toMatchObject({ type: 'turn/end', data: { reason: { kind: 'completed' } } })
+}
+
 async function writeHeaderSidecars(
   scenario: CorpusScenario,
   ordered: readonly PersistedLog[],
@@ -705,9 +736,16 @@ async function verifyHeaders(
   for (const [logIndex, log] of ordered.entries()) {
     const headers = normalizedHeaders(scrubSystemPrompts(log.content), ctx)
     const prompts = normalizedSystemPrompts(log.content, ctx)
+    // A fork retains ancestor headers and records its own resolved defaults separately.
+    const forkHeaders = logIndex > 0 && typeof log.header.seedLength === 'number'
+      ? normalizedHeaders(await readFile(join(scenario.dir, `session.${logIndex}.jsonl`), 'utf8'), ctx)
+      : undefined
     for (const [index, header] of headers.entries()) {
       const selectedSchemas = childSchemas.get(logIndex)?.[index]
-      const base = reconstructed[index] ?? reconstructed[0]
+      const forkHeader = forkHeaders?.[index]
+      const base = forkHeader === undefined
+        ? reconstructed[index] ?? reconstructed[0]
+        : restorePinnedToolSchemas(forkHeader, (schemaSets[index] ?? schemaSets[0]) as unknown[])
       const configured = logIndex === 1 && dshSdkChildConfig !== undefined
         ? { ...base as JsonObject, config: dshSdkChildConfig }
         : base
@@ -738,6 +776,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         recording ? logs.length : files.length,
         assertions.dshSdkChild !== undefined,
       )
+      if (assertions.liveFork === true) verifyLiveFork(ordered)
       const actualContext = contextOf(ordered, cwd)
 
       let expectedContents = await Promise.all(files.map(file => readFile(file, 'utf8')))
@@ -798,7 +837,6 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       for (const [index, actual] of actualSnapshots.entries()) {
         expect(actual, `${scenario.name}: session ${index}`).toBe(expectedSnapshots[index])
       }
-      await verifyHeaders(scenario, ordered, actualContext, assertions.dshSdkChild?.agentConfig)
 
       // Genuine SDK protocol cases retain their secondary wire projections.
       const finalResult = results.at(-1)
@@ -855,6 +893,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(observedMethods.has('subagent.started')).toBe(true)
         expect(observedMethods.has('subagent.finished')).toBe(true)
       }
+      await verifyHeaders(scenario, ordered, actualContext, assertions.dshSdkChild?.agentConfig)
     })
   }
 })

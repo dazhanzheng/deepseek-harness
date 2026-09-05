@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope, scopeTarget } from '@deepseek-ai/dsh-scope'
 import { createUserMessage, ToolCallId, createMessage, createToolResultMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, SessionSeq, TOOL_NOT_STARTED } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionSeq, TOOL_EXECUTION_NOT_INHERITED, TOOL_NOT_STARTED } from '@deepseek-ai/dsh-session'
 import * as SessionInvariant from '@deepseek-ai/dsh-session/invariant'
 import InvariantRegistry, { InvariantError } from '@deepseek-ai/dsh-invariants'
 
@@ -321,6 +321,30 @@ describe('session-log invariants', () => {
       surfaceOp: { op: 'replace', start: original.seq, end: original.seq },
       sourceEventSeqs: [original.seq],
     })).toThrow(/outside any open turn/)
+  })
+
+  it('requires a fork-closing result to be an error inside its open step', async () => {
+    const { ctx, fiber } = await setup()
+    try {
+      const session = ctx.sessions.create()
+      session.append('turn/start', { turn: 1 })
+      session.append('step/start', { turn: 1, step: 1 })
+      const result = (isError: boolean) => ({
+        turn: 1,
+        step: 1,
+        message: createToolResultMessage({ callId: ToolCallId('forked'), content: [], isError }),
+        error: { name: 'ToolExecutionNotInheritedError', code: TOOL_EXECUTION_NOT_INHERITED },
+      })
+
+      expect(() => session.append('tool/result', result(false), { surfaceOp: 'append' }))
+        .toThrow(/no prior tool\/call/)
+      expect(() => session.append('tool/result', result(true), { surfaceOp: 'append' })).not.toThrow()
+      session.append('step/end', { turn: 1, step: 1 })
+      expect(() => session.append('tool/result', result(true), { surfaceOp: 'append' }))
+        .toThrow(/open is turn 1\/step null/)
+    } finally {
+      await fiber.dispose()
+    }
   })
 
   it('allows not-started repair results and unresolved calls at step end', async () => {

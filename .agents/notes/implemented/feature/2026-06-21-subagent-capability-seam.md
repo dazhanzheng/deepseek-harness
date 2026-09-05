@@ -50,7 +50,7 @@ A provider exposes `start(request) → Promise<SubagentRun>`. Fulfillment publis
 
 ### Fork vs. fresh are separate backends, not a flag
 
-Fresh and forked children are separate providers, not a request flag. `dsh-subagent-spawn-in-process` starts an isolated child; `dsh-subagent-fork-in-process` seeds a balanced prefix containing only completed parent turns. The in-flight turn is excluded because its subagent call has no result yet and cannot form valid replay history.
+Fresh and forked children are separate providers, not a request flag. `dsh-subagent-spawn-in-process` starts an isolated child; `dsh-subagent-fork-in-process` selects a Session-owned snapshot of committed parent context. The [live-fork decision](../architecture/2026-09-05-live-subagent-fork-snapshots.md) owns child-only closure of unfinished inherited calls and turns.
 
 ### Child isolation and the parent log
 

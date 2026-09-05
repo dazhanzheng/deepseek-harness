@@ -16,7 +16,7 @@ import type { SubagentDescriptorData } from './descriptor.ts'
  * `Session` assigns the sequence number and enforces the same lossless-JSON
  * rules the durable log does.
  * @param childId - the reserved child session id the staged log belongs to.
- * @param seed - the inherited completed-turn prefix, or `undefined` for a fresh child.
+ * @param seed - captured parent context with child-owned execution closures, or `undefined` for a fresh child.
  * @param descriptor - the snapshotted composition record to persist.
  * @returns the complete seed events, contiguous from sequence zero.
  */

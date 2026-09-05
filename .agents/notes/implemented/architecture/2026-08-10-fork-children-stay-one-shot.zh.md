@@ -1,14 +1,14 @@
-# Agent Note：Fork child 保留 parent 请求前缀
+# Agent Note: Fork child 保留 parent 请求前缀
 
-状态：已实现
+Status: implemented
 
 [English](2026-08-10-fork-children-stay-one-shot.md) | 中文
 
 ## 问题
 
-fork 与 spawn 的差异在于：fork 会用 parent 已完成轮次的前缀作为 child Session 的种子。该种子会消耗 token，其预期收益是提供方侧的前缀复用：使用相同提供方和模型时，如果 child 请求的开头字节与 parent 相同，共享区段就无需再次预填充。任何位于继承历史之前、仅属于 child 的系统提示词 section 或工具 schema 都会破坏这项收益。
+fork 与 spawn 的差异在于：fork 会用 parent 已提交对话的前缀作为 child Session 的种子。该种子会消耗 token，其预期收益是提供方侧的前缀复用：使用相同提供方和模型时，如果 child 请求的开头字节与 parent 相同，共享区段就无需再次预填充。任何位于继承历史之前、仅属于 child 的系统提示词 section 或工具 schema 都会破坏这项收益。
 
-先前的随附组合通过把 fork child 保持为 one-shot 来避开这种不匹配。该限制源于原来的 child-only 返回工具，并非可继续 fork 的固有属性。
+先前的随附组合通过把 fork child 保持为 one-shot 来避开这种不匹配。该限制源于原来的 child-only 返回工具，并非可继续 fork 的固有属性。[实时 fork 快照决策](2026-09-05-live-subagent-fork-snapshots.zh.md)负责继承上下文的选择与闭合。
 
 ## 决策
 

@@ -366,11 +366,11 @@ interface ToolArgsMap {
     /** Whether to run in the background and return a durable subagent id immediately. Defaults to true. Set false to wait for the result when your next action depends on it. */
     run_in_background?: boolean;
   } & Record<string, JsonValue>;
-  /** Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This call waits for the subagent and returns its result. */
+  /** Delegate a task to a subagent that inherits this conversation: a child agent seeded with all recorded messages so far, including the current turn's reasoning and completed tool results. Pending tool execution stays with you; later messages are not shared automatically. Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This call waits for the subagent and returns its result. */
   subagent_fork: {
     /** A short (3-5 word) description of the delegated task, for display. */
     description: string;
-    /** The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new. */
+    /** The task for the subagent. It already sees this conversation's recorded context, including the current turn. State its assignment, scope, and expected result. */
     prompt: string;
   } & Record<string, JsonValue>;
   /** Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished). */

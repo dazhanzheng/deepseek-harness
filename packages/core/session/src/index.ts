@@ -15,16 +15,17 @@ import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
-import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SurfaceIntent, SurfaceEventType } from './types.ts'
+import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionForkSeed, SessionHeader, SessionId, SurfaceIntent, SurfaceEventType } from './types.ts'
 import { deriveEventMessage, SurfaceManager } from './surface.ts'
 import type { SessionSurface } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
+import { forkTurnClosers } from './repair.ts'
 
 export * from './types.ts'
 export { SessionPreparation } from './preparation.ts'
 export type { SessionPreparationOptions } from './preparation.ts'
 export type { AssistantMessage, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-llm'
-export { interruptedTurnClosers, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
+export { interruptedTurnClosers, TOOL_EXECUTION_NOT_INHERITED, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
 export { decodeStorageRecord, packChunkRuns } from './chunk-rows.ts'
 export type { ChunkRow, StorageRecord } from './chunk-rows.ts'
 export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult } from './surface.ts'
@@ -760,6 +761,22 @@ export class Session {
       this.contextFoldSeq = this.log.length
     }
     return this.contextFold
+  }
+
+  /**
+   * Snapshot committed history for a child, retaining the current turn's messages.
+   * Child-only records close unfinished tools and their step/turn without changing
+   * the parent or transferring its pending work. Unanchored stream chunks stay
+   * log-only; only committed messages enter the child's model history.
+   * @returns immutable seed events with their exact parent-prefix length.
+   */
+  snapshotForFork(): SessionForkSeed {
+    const events = this.snapshotEvents()
+    const closers = deepFreeze(forkTurnClosers(events))
+    return Object.freeze({
+      events: Object.freeze([...events, ...closers]),
+      inheritedEventCount: SessionLogOffset(events.length),
+    })
   }
 
   /** The derived-message cache: frozen projections, extended per unseen node. */

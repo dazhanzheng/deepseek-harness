@@ -32,7 +32,7 @@ export interface Config {
   diagnostic?: string
   /** Start-time features advertised by the provider. */
   capabilities?: Partial<SubagentCapabilities>
-  /** Whether tool descriptions say the child inherits completed turns. */
+  /** Whether tool descriptions say the child inherits the committed conversation. */
   inheritsParentContext?: boolean
   /** Provider-owned child route defaults. */
   agentRouteDefaults?: Readonly<{ provider: string; model: string }>

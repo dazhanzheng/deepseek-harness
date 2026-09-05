@@ -201,14 +201,14 @@ describe('startInProcessRun', () => {
     const { ctx, parent } = await setup([textResponse('parent answer'), textResponse('child answer')])
     parent.followup(createUserMessage({ content: [{ type: 'text', text: 'parent question' }], source: { kind: 'user' } }))
     await parent.whenIdle()
-    const seed = parent.session.snapshotEvents()
+    const seed = parent.session.snapshotForFork()
     const run = await startInProcessRun(request(parent), { seed })
     const result = await run.result
     expect(text(result.output)).toBe('child answer')
     const child = ctx.agents.get(run.id)!
     expect(child.session.header.isSeeded).toBe(true)
-    expect(child.session.inheritedEventCount).toBe(seed.length)
-    expect(child.session.snapshotEvents().slice(0, seed.length)).toEqual(seed)
+    expect(child.session.inheritedEventCount).toBe(seed.inheritedEventCount)
+    expect(child.session.snapshotEvents().slice(0, seed.events.length)).toEqual(seed.events)
     await run.dispose()
   })
 

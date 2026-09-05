@@ -3740,7 +3740,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContinuableCreateSpec',
-    declaration: 'export interface ContinuableCreateSpec {\n    readonly seed?: readonly SessionEvent[];\n}',
+    declaration: 'export interface ContinuableCreateSpec {\n    readonly seed?: SessionForkSeed;\n}',
   },
   {
     name: 'ContinuableStart',
@@ -4796,7 +4796,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'Session',
-    declaration: 'export class Session {\n    get surface(): SessionSurface;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    get id(): SessionId;\n    readonly firstLiveSeq: SessionLogOffset;\n    static create(id: SessionId, seed?: readonly SessionEvent[], header?: SessionHeader, inheritedEventCount?: SessionLogOffset): Session;\n    static fromRestore(id: SessionId, seed: readonly SessionEvent[], header: SessionHeader, inheritedEventCount: SessionLogOffset): Session;\n    eventAt(seq: SessionSeq): SessionEvent | undefined;\n    snapshotEvents(fromSeq: SessionLogOffset = SessionLogOffset(0), toSeqExclusive: SessionLogOffset = this.seq): readonly SessionEvent[];\n    ownEvents(): readonly SessionEvent[];\n    isOwnSeq(seq: SessionSeq): boolean;\n    get seq(): SessionLogOffset;\n    append<T extends SessionEventType>(type: T, data: SessionEventMap[T], ...opts: T extends SurfaceEventType ? [\n        opts: SurfaceIntent\n    ] : [\n    ]): SessionEvent<T>;\n    requestHeader(): EpochHeader | undefined;\n    requestContext(): RequestContext | undefined;\n    deriveMessages(): Message[];\n    deriveEventMessage(event: SessionEvent): Message | null;\n}',
+    declaration: 'export class Session {\n    get surface(): SessionSurface;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    get id(): SessionId;\n    readonly firstLiveSeq: SessionLogOffset;\n    static create(id: SessionId, seed?: readonly SessionEvent[], header?: SessionHeader, inheritedEventCount?: SessionLogOffset): Session;\n    static fromRestore(id: SessionId, seed: readonly SessionEvent[], header: SessionHeader, inheritedEventCount: SessionLogOffset): Session;\n    eventAt(seq: SessionSeq): SessionEvent | undefined;\n    snapshotEvents(fromSeq: SessionLogOffset = SessionLogOffset(0), toSeqExclusive: SessionLogOffset = this.seq): readonly SessionEvent[];\n    ownEvents(): readonly SessionEvent[];\n    isOwnSeq(seq: SessionSeq): boolean;\n    get seq(): SessionLogOffset;\n    append<T extends SessionEventType>(type: T, data: SessionEventMap[T], ...opts: T extends SurfaceEventType ? [\n        opts: SurfaceIntent\n    ] : [\n    ]): SessionEvent<T>;\n    requestHeader(): EpochHeader | undefined;\n    requestContext(): RequestContext | undefined;\n    snapshotForFork(): SessionForkSeed;\n    deriveMessages(): Message[];\n    deriveEventMessage(event: SessionEvent): Message | null;\n}',
   },
   {
     name: 'SessionAddress',
@@ -4925,6 +4925,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionForkRequest',
     declaration: 'export interface SessionForkRequest {\n    readonly sessionId: SessionId;\n    readonly atSeq?: number;\n}',
+  },
+  {
+    name: 'SessionForkSeed',
+    declaration: 'export interface SessionForkSeed {\n    readonly events: readonly SessionEvent[];\n    readonly inheritedEventCount: SessionLogOffset;\n}',
   },
   {
     name: 'SessionForkSource',
@@ -5848,7 +5852,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TurnEndReasonMap',
-    declaration: 'export interface TurnEndReasonMap {\n    completed: {\n        kind: \'completed\';\n    };\n    aborted: {\n        kind: \'aborted\';\n        reason: TurnEndCancelCause;\n    };\n    blocked: {\n        kind: \'blocked\';\n    };\n    error: {\n        kind: \'error\';\n        error: LlmFailure;\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    interrupted: {\n        kind: \'interrupted\';\n    };\n}',
+    declaration: 'export interface TurnEndReasonMap {\n    completed: {\n        kind: \'completed\';\n    };\n    aborted: {\n        kind: \'aborted\';\n        reason: TurnEndCancelCause;\n    };\n    blocked: {\n        kind: \'blocked\';\n    };\n    error: {\n        kind: \'error\';\n        error: LlmFailure;\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    interrupted: {\n        kind: \'interrupted\';\n    };\n    forked: {\n        kind: \'forked\';\n    };\n}',
   },
   {
     name: 'TypertCodec',

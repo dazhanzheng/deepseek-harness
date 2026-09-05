@@ -1,5 +1,5 @@
 ---
-description: "In-process fork subagent backend for users and maintainers choosing, configuring, or debugging children seeded with the parent's completed turns."
+description: "In-process fork subagent backend for users and maintainers choosing, configuring, or debugging children seeded with the parent's committed conversation."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-subagent-fork-in-process` is an in-process subagent backend that seeds each child with the parent's completed conversation turns: the child sees every finished turn and none of the in-flight one, so follow-up work builds on the conversation without duplicating it. A delegation tool reaches it under the `fork` provider name, and its behavior matches the spawn backend except for the session seed. Choose it when a subtask continues this conversation; choose spawn when the child must stand alone. The seed is a one-time snapshot taken at fork time: later parent turns never reach the child.
+`dsh-subagent-fork-in-process` seeds each child with the parent's committed conversation at delegation time, including the current turn's messages, reasoning, and recorded tool results. A delegation tool reaches it under the `fork` provider name, and its behavior matches the spawn backend except for the session seed. Choose it when a subtask continues this conversation; choose spawn when the child must stand alone. The seed is a one-time snapshot taken at fork time: later parent turns never reach the child.
 
 ## Table of Contents
 
@@ -29,11 +29,11 @@ Mount this backend when delegated work must build on the parent's conversation. 
 
 ### When to choose it
 
-Choose fork when the child needs the conversation's completed turns — a follow-up analysis, a review, a continuation. Choose spawn when the child should start clean, or an out-of-process backend when the child must not share this process. The seed carries conversation history only: the child still gets a fresh tool scope and none of the parent's authority.
+Choose fork when the child needs the conversation's committed context — a follow-up analysis, a review, a continuation. Choose spawn when the child should start clean, or an out-of-process backend when the child must not share this process. The seed carries conversation history only: the child still gets a fresh tool scope and none of the parent's authority.
 
 ### Seed boundary
 
-The seed ends at the parent's last completed turn. A parent's current tool-calling turn is still open when a subagent starts, so that in-flight turn is never included; before the first completed turn the seed is empty and the child behaves like a fresh spawn.
+The seed includes every parent event committed when the provider captures it. Session-owned closing records balance unfinished tool calls and close the inherited step and turn in the child only. Those calls remain the parent's responsibility; the child must not retry them. Unassembled stream chunks stay log-only, and later parent events are not synchronized.
 
 ### Minimal configuration
 
@@ -55,7 +55,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 ### What a fork delegation does
 
-One tool call starts one child seeded with the completed turns and waits for its result: the child sees the conversation up to the parent's last completed turn, works in its own session, and the parent receives only its final output — or an errored tool result for cancellation, refusal, token-limit truncation, or startup rejection. The seed is captured once at start; later parent turns never reach the child.
+A delegation captures the parent's committed context once and starts a child in its own session. Foreground calls return the child's final output, with non-completed outcomes reported as tool errors; continuable background calls return a durable child id for later messages. The delegation tool's configuration selects that lifecycle.
 
 -----
 
@@ -69,18 +69,18 @@ This section explains the design decisions behind the backend and where the beha
 
 ### Design concept
 
-One difference from spawn, expressed as data: the backend computes the balanced completed-turn prefix of the parent's log and hands it to the shared in-process driver as the child's session seed. Because live sequence numbers equal array indexes, the prefix stays a valid seed beginning at sequence zero, and the driver records its length so the result reader never mistakes a seeded parent message for child output.
+The provider obtains a `SessionForkSeed` through `Session.snapshotForFork()`. The Session owns closure and replay semantics; the provider chooses the history, and the one-shot driver or continuation manager owns child execution. The seed distinguishes the true parent prefix from child-only closing records. Result collection excludes the entire seed.
 
 ### Source map
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Provider registration: prefix computation, `Config` schema, capability declaration |
+| [`src/index.ts`](src/index.ts) | Provider registration: snapshot selection, `Config` schema, capability declaration |
 | — | No runtime invariant companion is published; this package exposes no independent event sequence or mutable data relation beyond contracts enforced at its owning seam. |
 
 ### Run flow
 
-On `start`, the prefix is sliced from the parent's event log up to and including the last `turn/end`; the shared driver then creates the child with that seed, applies the same persona, tool-filter, and structured-output setup, drives one task, reads the child's own final output, and disposes quiescently. The provider advertises `agentOptions` plus the same output, depth, filter, and persona capabilities as spawn. `prepareContinuable` captures the prefix once, at creation, because it becomes part of the child's own durable transcript.
+On `start`, the shared driver creates the child from the captured seed, applies persona, tool-filter, and structured-output setup, drives one task, reads the child's own final output, and disposes quiescently. The provider advertises `agentOptions` plus the same output, depth, filter, and persona capabilities as spawn. `prepareContinuable` captures the prefix once, at creation, because it becomes part of the child's own durable transcript.
 
 ### Lifecycle binding
 
@@ -100,7 +100,7 @@ Read these pages when the package-level contract is not enough; they move from t
 - [dsh-subagent-spawn-in-process](../subagent-spawn-in-process/README.md) — the fresh-child sibling backend.
 - [dsh-tool-subagent](../tool-subagent/README.md) — the model-facing delegation tool that reaches this provider.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-fork-in-process) — every accepted config field and its source declaration.
-- [Fork children stay one-shot](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md) — why shipped compositions bind fork to one-shot.
+- [Forked children preserve the parent request prefix](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md) — how inherited history remains eligible for prefix reuse.
 
 -----
 
@@ -111,11 +111,11 @@ Read these pages when the package-level contract is not enough; they move from t
 
 #### What the model sees
 
-The child receives the parent's balanced completed-turn prefix, then the new task content verbatim. A configured persona shadows prompt text in the child's fresh scope; a tool restriction filters its global wire schemas, executable lookup, and PTC mode SDK bindings but not standalone guidance. The parent's tool view and authority are not inherited; an optional structured-output request adds a child-only contract; the parent's current in-flight turn is excluded.
+The child receives the parent's committed conversation, any child-only closing results, and the new task content verbatim. A configured persona shadows prompt text in the child's fresh scope; a tool restriction filters its global wire schemas, executable lookup, and PTC mode SDK bindings but not standalone guidance. The parent's tool view and authority are not inherited; an optional structured-output request adds a child-only contract; the current turn's committed messages and reasoning are retained, while execution remains with the parent.
 
 #### Token effect
 
-Forking duplicates retained completed history into the child's request, which then accumulates its own tokens independently. A persona changes repeated prompt cost; filtering changes schema or generated SDK cost; a first-turn fork has no inherited history.
+Forking duplicates retained committed history into the child's request, which then accumulates its own tokens independently. A persona changes repeated prompt cost; filtering changes schema or generated SDK cost; a first-turn fork retains the current user message and committed assistant work.
 
 #### KV Cache effect
 
@@ -142,7 +142,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when the backend is the wrong choice; they are current package constraints.
 
-- **The seed is a one-time snapshot** — the child sees the parent's completed turns as of the fork and nothing the parent logs afterwards; there is no live context sharing.
+- **The seed is a one-time snapshot** — the child sees the parent's committed context as of the fork and nothing the parent logs afterwards; there is no live context sharing.
 - **Fork lifecycle policy differs by composition** — the base bundle and ACP/headless examples use one-shot fork, while the CLI presets use continuable fork. Both keep the inherited prefix eligible for reuse because parent and child messaging definitions match byte for byte; explicit persona, tool filtering, generated-SDK, or route changes can still break equality. Rationale: the [cache-preserving fork Agent Note](../../../.agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md).
 - **Shipped fork tools do not expose child LLM route selection** — they inherit the parent's provider and model so the copied history remains eligible for KV Cache reuse. Route selection stays disabled until a change can preserve reuse or expose a bounded recomputation cost; the [model-selected route Agent Note](../../../.agents/notes/implemented/feature/2026-08-18-model-selected-subagent-routes.md) owns that restriction.
 

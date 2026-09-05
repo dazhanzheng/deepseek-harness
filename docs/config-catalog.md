@@ -2456,7 +2456,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/subagent/subagent-fork-in-process/src/index.ts:31`](../packages/subagent/subagent-fork-in-process/src/index.ts)
+Source: [`packages/subagent/subagent-fork-in-process/src/index.ts:29`](../packages/subagent/subagent-fork-in-process/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-spawn-in-process"></a>
 

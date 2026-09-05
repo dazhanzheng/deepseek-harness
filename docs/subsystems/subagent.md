@@ -248,11 +248,10 @@ interface ContinuableCreateRequest {
  */
 interface ContinuableCreateSpec {
   /**
-   * Completed-turn prefix of the parent's log to seed the child session with,
-   * or absent for a fresh child. Same durable contract as
-   * `CreateAgentOptions.seed`: contiguous from seq 0, lossless JSON, balanced.
+   * Parent context and child-owned execution closures captured once at creation,
+   * or absent for a fresh child. The inherited count excludes the closures.
    */
-  readonly seed?: readonly SessionEvent[]
+  readonly seed?: SessionForkSeed
 }
 ```
 
@@ -405,7 +404,7 @@ interface SubagentProvider {
   /** The start-time features this provider supports (see {@link SubagentCapabilities}). */
   readonly capabilities: SubagentCapabilities
   /**
-   * Whether the child sees the parent's completed-turn prefix. This is descriptive, not a
+   * Whether the child sees the parent's committed conversation at creation. This is descriptive, not a
    * service-validated start capability: the model-facing tool derives truthful wording from it.
    * It says nothing about tool registration, injected services, or authority inheritance.
    */
@@ -455,7 +454,7 @@ Provider `start()` fulfills with a published run. The service mints a unique `ru
 The spawn and fork backends create an ordinary one-shot agent through `parent.ctx`, pass cancellation into core creation, and dispose through `AgentHandle`; a continuable child is instead created by the continuation manager through its own activation-owner scope. Provider removal blocks new starts without revoking accepted runs. Each child gets a new flat scope rather than inheriting parent registrations. Depth and fork seeding reuse existing agent and session vocabulary:
 
 - **Delegation depth** is durable `SessionHeader.delegationDepth` plus the merge-extensible runtime field `AgentOptions.subagentDepth`; absence means top-level depth zero, and the greater present value is authoritative. The seam owns both fields — the loop neither sets nor reads them — so an in-process child persists parent depth + 1, cold resume cannot lower it, and every start rejects a derived depth outside the safe-integer domain or above a defined absolute `request.maxDepth` cap.
-- **Fork seeding** uses [`CreateAgentOptions.seed`](core.md#creation-and-ownership) (a `SessionEvent[]` prefix threaded through `AgentLoop.createAgent` → `ctx.sessions.prepare({ seed })`, the same primitive `ctx.agents.resume()` uses). The fork backend passes a *balanced completed-turn prefix* of the parent's log — the parent's events up to and including its last `turn/end` — so the seed is contiguous-from-0 and the [invariants](../../packages/runtime-diagnostics/invariants) replay accepts it (the in-flight, unbalanced turn is excluded).
+- **Fork seeding** uses [`CreateAgentOptions.seed`](core.md#creation-and-ownership) (a `SessionEvent[]` prefix threaded through `AgentLoop.createAgent` → `ctx.sessions.prepare({ seed })`, the same primitive `ctx.agents.resume()` uses). The fork backend obtains a `SessionForkSeed` from `Session.snapshotForFork()`, preserving the current turn's committed context and child-only closing records. Creators pass its events and exact inherited-prefix length separately, so [invariants](../../packages/runtime-diagnostics/invariants) accept the child without transferring unfinished parent execution.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

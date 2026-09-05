@@ -238,12 +238,10 @@ async function settleForegroundRun(run: SubagentRun): Promise<ForegroundToolResu
 /**
  * Model-facing wording from the provider's conversation-history descriptor
  * ({@link SubagentProvider.inheritsParentContext}).
- * A fresh child needs a standalone prompt; a forked child already sees the
- * conversation's completed turns — telling the model to restate everything
- * (or, worse, that the child "does not see this conversation") would be false
- * for a fork.
+ * A fresh child needs a standalone prompt; a forked child sees the conversation
+ * recorded when delegation starts, including committed current-turn messages.
  * @param inheritsConversation - whether the child's conversation is seeded
- *   with the parent's completed turns; this says nothing about tool, service,
+ *   with the parent's committed conversation; this says nothing about tool, service,
  *   scope, or authority inheritance.
  * @returns the tool `description` and the `prompt` parameter description.
  */
@@ -252,13 +250,14 @@ function providerWording(inheritsConversation: boolean): { description: string; 
     return {
       description:
         'Delegate a task to a subagent that inherits this conversation: a child agent seeded with all '
-        + 'completed turns so far (it does not see the current in-flight turn). Use this when the subtask '
+        + 'recorded messages so far, including the current turn\'s reasoning and completed tool results. '
+        + 'Pending tool execution stays with you; later messages are not shared automatically. Use this when the subtask '
         + 'builds on this conversation\'s context — a follow-up analysis, '
         + 'a review, a continuation — without consuming this conversation\'s context for the work itself. '
         + 'You receive its result, not its intermediate steps.',
       promptDescription:
-        'The task for the subagent. It already sees this conversation\'s completed turns, so build on them '
-        + 'freely and state only what is new.',
+        'The task for the subagent. It already sees this conversation\'s recorded context, including the current turn. '
+        + 'State its assignment, scope, and expected result.',
     }
   }
   return {

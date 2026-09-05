@@ -157,6 +157,14 @@ export interface CreateSessionOptions {
   }
 }
 
+/** Immutable fork history, including child-owned records that close inherited work. */
+export interface SessionForkSeed {
+  /** Parent events followed by any child-only tool results and step/turn endings. */
+  readonly events: readonly SessionEvent[]
+  /** Exact parent prefix length; excludes the child-only closing records. */
+  readonly inheritedEventCount: SessionLogOffset
+}
+
 /**
  * Fresh storage values transferred to {@link SessionStore.prepare} without a
  * second serialization copy. Callers retain no mutable aliases.
@@ -209,6 +217,8 @@ export interface TurnEndReasonMap {
    * emits this marker, and the events recorded before the crash remain intact.
    */
   interrupted: { kind: 'interrupted' }
+  /** A child snapshot closes inherited work without stopping its parent. */
+  forked: { kind: 'forked' }
 }
 
 /** The union over {@link TurnEndReasonMap} — why a turn ended; plugins extend it by merging variants into the map. */

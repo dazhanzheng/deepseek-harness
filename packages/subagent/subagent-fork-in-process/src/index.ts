@@ -2,15 +2,13 @@
  * The in-process FORK subagent backend: registers a {@link SubagentProvider} on
  * `ctx.subagents` that runs each child as a child {@link Agent} SEEDED with a prefix of the
  * parent's session log — so the child inherits the parent's conversation context instead of
- * starting fresh. The seed ends at the last `turn/end`: the current tool-call turn is
- * unbalanced and cannot be replayed as a valid child session.
+ * starting fresh. Session snapshots preserve committed context from the current turn and
+ * close inherited execution only in the child's copy.
  * @module @deepseek-ai/dsh-subagent-fork-in-process
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {
   ContinuableCreateRequest,
   ContinuableCreateSpec,
@@ -38,22 +36,6 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * The balanced completed-turn prefix of `parent`'s log: every event up to and including the
- * last `turn/end`. The in-flight turn is excluded; before any completed turn the child starts
- * fresh. Because live sequence numbers equal array indexes, the result remains a valid seed
- * beginning at sequence zero.
- * @param parent - the agent whose session log to slice.
- * @returns the seed events, contiguous from seq 0; empty when no turn has completed.
- */
-function completedTurnPrefix(parent: Agent): SessionEvent[] {
-  const events = parent.session.snapshotEvents()
-  const lastEnd = events.findLast(e => e.type === 'turn/end')
-  if (lastEnd === undefined) return []
-  // seq === array index (the append contract), so slice up to and including it.
-  return events.slice(0, lastEnd.seq + 1)
-}
-
-/**
  * The fork provider. Supports `depthLimit` and `outputSchema` (via the shared
  * in-process structured runtime), `agentOptions` (merged over the parent
  * route), and `toolFilter`/`persona` (scoped restrict() and a scoped shadowing
@@ -67,17 +49,14 @@ class ForkInProcessProvider implements SubagentProvider {
     toolFilter: true,
     persona: true,
   }
-  // Context contract: a forked child IS seeded with the parent's completed-turn prefix.
   readonly inheritsParentContext = true
 
   constructor(readonly name: string) {}
 
   start(request: ResolvedSubagentStartRequest) {
-    const seed = completedTurnPrefix(request.parent)
+    const seed = request.parent.session.snapshotForFork()
     return startInProcessRun(request, {
-      // Only pass a seed when there's a completed turn to inherit; an empty seed
-      // is equivalent to a fresh child, so omit it to keep the session unseeded.
-      ...seed.length > 0 ? { seed } : {},
+      ...seed.inheritedEventCount > 0 ? { seed } : {},
     })
   }
 
@@ -85,8 +64,8 @@ class ForkInProcessProvider implements SubagentProvider {
     // The fork prefix is captured ONCE, at creation: it becomes part of the
     // child's own durable transcript, so a later cold resume replays that
     // prefix instead of re-forking the parent's newer history.
-    const seed = completedTurnPrefix(request.parent)
-    return Promise.resolve(seed.length > 0 ? { seed } : {})
+    const seed = request.parent.session.snapshotForFork()
+    return Promise.resolve(seed.inheritedEventCount > 0 ? { seed } : {})
   }
 }
 

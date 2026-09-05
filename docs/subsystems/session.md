@@ -532,6 +532,14 @@ declare class Session {
    */
   requestContext(): RequestContext | undefined;
   /**
+   * Snapshot committed history for a child, retaining the current turn's messages.
+   * Child-only records close unfinished tools and their step/turn without changing
+   * the parent or transferring its pending work. Unanchored stream chunks stay
+   * log-only; only committed messages enter the child's model history.
+   * @returns immutable seed events with their exact parent-prefix length.
+   */
+  snapshotForFork(): SessionForkSeed;
+  /**
    * Derive the LLM message history by walking the ordered sequences of
    * message-producing events maintained by `surfaceOp` markers. The
    * surface is the single source of derived history: every message-producing
@@ -560,6 +568,20 @@ declare class Session {
 }
 ```
 
+## Live fork seed: `SessionForkSeed`
+
+`Session.snapshotForFork()` returns committed parent context and child-only closing records without publishing a child or changing its parent. Creators pass `events` as the seed and carry `inheritedEventCount` separately; see the [Session package](../../packages/core/session/README.md).
+
+```ts type-equiv
+/** Immutable fork history, including child-owned records that close inherited work. */
+interface SessionForkSeed {
+  /** Parent events followed by any child-only tool results and step/turn endings. */
+  readonly events: readonly SessionEvent[]
+  /** Exact parent prefix length; excludes the child-only closing records. */
+  readonly inheritedEventCount: SessionLogOffset
+}
+```
+
 ## Derived history: `deriveMessages()` and `deriveEventMessage()`
 
 `Session.deriveMessages()` projects the event log into the `Message[]` the model sees — cached (each surface node projected once, when first seen; a surface rewrite rebuilds) and frozen (a fresh array per call over shared, deep-frozen messages, so mutating logged history through a projection is unrepresentable). `deriveEventMessage(event)` is the per-node pure function the fold applies — public so external reconstructors and the dev invariant project a log prefix with exactly the same rules and cannot disagree with the cache. The projection rules:
@@ -577,7 +599,7 @@ Everything else (`turn/*`, `step/*`, plugin-owned `llm/retry`) is structural and
 
 - `fork(source, boundary?, childSessionId?)` accepts a live `Session` object or live `SessionId`, selects source events through the inclusive `SessionSeq` boundary (default: current last event), requires the selected prefix to end outside an open turn, then creates a live child session with deep-cloned seed events, `parentSession`, `isSeeded: true`, the exact `inheritedEventCount`, and inherited `cwd`.
 
-An explicit `boundary` lets callers fork from any stable between-turn position, including a previous `turn/end` or a later standalone log-only event, even if the source has newer events or an open current turn. The API rejects a prefix that ends inside an open turn instead of clipping silently. Broader execution-relation sanity stays in the existing `dsh-invariants` plugin and persistence repair path rather than being duplicated in `fork()`. `dsh-subagent-fork-in-process` keeps its completed-prefix clipping because tool-time delegation usually starts while the parent turn is open; ordinary session branching should make the requested boundary explicit.
+An explicit `boundary` lets callers fork from any stable between-turn position, including a previous `turn/end` or a later standalone log-only event, even if the source has newer events or an open current turn. The API rejects a prefix that ends inside an open turn instead of clipping silently. Broader execution-relation sanity stays in the existing `dsh-invariants` plugin and persistence repair path rather than being duplicated in `fork()`. Tool-time delegation uses `Session.snapshotForFork()` to retain current-turn context with child-only closing records; ordinary session branching keeps the explicit stable-boundary policy.
 
 ## Why a turn ended: `TurnEndReasonMap`
 
@@ -611,10 +633,12 @@ interface TurnEndReasonMap {
    * emits this marker, and the events recorded before the crash remain intact.
    */
   interrupted: { kind: 'interrupted' }
+  /** A child snapshot closes inherited work without stopping its parent. */
+  forked: { kind: 'forked' }
 }
 ```
 
-`max-tokens` mirrors the model-call `FinishReason` of the same name: any `max-tokens` step in a turn makes the whole turn end `max-tokens` rather than `completed` (the cut-short fact wins over a later continuation), so a consumer can tell a clean stop from a truncated one. Cancellation and errors remain distinct outcomes. `interrupted` is the one reason no loop emits—it is synthesized by crash recovery (see [persistence.md](persistence.md)). The map is merge-extensible.
+`max-tokens` mirrors the model-call `FinishReason` of the same name: any `max-tokens` step in a turn makes the whole turn end `max-tokens` rather than `completed` (the cut-short fact wins over a later continuation), so a consumer can tell a clean stop from a truncated one. Cancellation and errors remain distinct outcomes. `interrupted` is synthesized by crash recovery (see [persistence.md](persistence.md)); `forked` closes inherited work in a child snapshot while the parent continues. The loop emits neither reason. The map is merge-extensible.
 
 ## Execution enclosure and standalone events
 

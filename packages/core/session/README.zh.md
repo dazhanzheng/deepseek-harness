@@ -57,7 +57,9 @@ session.deriveMessages()         // the derived model history
 
 ### 派生会话的 fork
 
-`ctx.sessions.fork(source, boundary?, childSessionId?)` 选取截至 `boundary` 事件序号（含该事件）的源事件（默认：当前最后一个事件），要求所选前缀结束时没有开放轮次，再创建带谱系元数据的实时子会话。必须在轮次中途分支的工具时委派会裁剪到已完成前缀。
+`ctx.sessions.fork(source, boundary?, childSessionId?)` 选取截至 `boundary` 事件序号（含该事件）的源事件（默认：当前最后一个事件），要求所选前缀结束时没有开放轮次，再创建带谱系元数据的实时子会话。
+
+`session.snapshotForFork()` 为轮次中途的委派准备不可变 seed 数据。它保留全部已提交的父事件，包括当前消息和推理，并为未完成的工具调用添加仅属于子会话的结果，再闭合其步骤和轮次，原因为 `forked`。父会话继续运行。返回的 `SessionForkSeed` 将完整 `events` 与真实父前缀的 `inheritedEventCount` 分开，因此父收件箱中的待处理项不会成为子会话的工作。尚未组装成消息的原始流分片仍只保存在日志中。
 
 逻辑 `SessionHeader.isSeeded` 字段报告是否存在 fork 历史，而不公开位置整数。`Session.inheritedEventCount` 保留经过校验的精确 `SessionLogOffset`；`ownEvents()` 返回从该切点开始的事件，`isOwnSeq(seq)` 只接受已存在且由 child 拥有的位置。底层带 seed 构造必须显式提供 `seed` 与 `inheritedEventCount`，因为构造 seed 可以在继承前缀之后包含 child 自有的设置事件。
 
@@ -93,7 +95,7 @@ session.deriveMessages()         // the derived model history
 | [`src/request-header.ts`](src/request-header.ts) | `request/header` 折叠与重建 |
 | [`dsh-util-values`](../../util/values/README.zh.md) | 共享无损 JSON 校验与分离式快照 |
 | [`src/chunk-rows.ts`](src/chunk-rows.ts) | 供持久化后端使用的共享紧凑行存储编解码器 |
-| [`src/repair.ts`](src/repair.ts) | 崩溃遗留日志的冷修复 |
+| [`src/repair.ts`](src/repair.ts) | 崩溃恢复与 fork 快照共用的轮次闭合 |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式配套：序号、轮次／步骤闭合、工具调用／结果配对 |
 
 ### 追加校验
@@ -155,6 +157,20 @@ session.deriveMessages()         // the derived model history
 #### KV Cache 影响
 
 保持仅追加；新可见内容位于可复用请求前缀之后，不会使现有 KV Cache 条目失效。
+
+### Fork 快照的工具结果
+
+#### 模型看到什么
+
+未完成的继承调用收到 `TOOL_EXECUTION_NOT_INHERITED` 结果：`This tool call belongs to the parent agent. Its result was not available when this conversation was forked. The parent retains responsibility for it; do not execute or retry it. Continue with your delegated task.` 该结果不表示父会话中发生了执行或取消。
+
+#### Token 影响
+
+每个未完成的继承调用增加一条固定结果，保留在子会话中，直到压缩替换它。
+
+#### KV Cache 影响
+
+闭合结果追加在继承消息前缀之后，不会改写前面的 token。
 
 ### 已记录的请求头
 

@@ -1,9 +1,10 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
@@ -16,8 +17,14 @@ import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import * as fork from '../src/index.ts'
 import { STRUCTURED_OUTPUT_TOOL } from '@deepseek-ai/dsh-subagent-in-process-driver'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 
 type Script = ConstructorParameters<typeof MockAdapter>[0]
+
+const contexts: Context[] = []
+afterEach(async () => {
+  for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+})
 
 async function mountInvariants(ctx: Context): Promise<void> {
   await ctx.plugin(InvariantRegistry)
@@ -38,19 +45,21 @@ const emptyStop: StreamChunk[] = [{ type: 'finish', reason: { kind: 'stop' } }]
  * Drives the REAL fork backend with a real loop + scripted mock MODEL + the
  * real invariant service and package companions. The session contribution replays a seeded child log on
  * `session/created`, so a malformed (unbalanced) fork seed makes these tests
- * THROW — that is the regression guard for the completed-turn-prefix boundary.
+ * THROW before the child can issue a model request.
  */
-async function setup(script: Script) {
+async function setup(script: Script, maxParallelToolCalls?: number) {
   const ctx = new Context()
+  contexts.push(ctx)
   await mountAgentLoopTestDependencies(ctx)
   await mountInvariants(ctx)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: [], ...maxParallelToolCalls === undefined ? {} : { maxParallelToolCalls } })
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(fork, { providerName: 'fork' })
-  ctx.llm.registerAdapter(['mock'], new MockAdapter(script))
+  const adapter = new MockAdapter(script)
+  ctx.llm.registerAdapter(['mock'], adapter)
   const parent = ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
-  return { ctx, parent }
+  return { ctx, parent, adapter }
 }
 
 function text(blocks: { type: string; text?: string }[]): string {
@@ -75,9 +84,7 @@ describe('dsh-subagent-fork-in-process', () => {
     await run.dispose()
   })
 
-  it('forks an UNSEEDED (fresh) child when the parent has no completed turn', async () => {
-    // The parent has never completed a turn → empty prefix → the provider omits
-    // the seed → the child runs fresh. Exercises the `seed.length > 0` false arm.
+  it('starts an unseeded child when the parent log is empty', async () => {
     const { ctx, parent } = await setup([textResponse('fresh child')])
     const run = await start(ctx, 'fork', { prompt: [{ type: 'text', text: 'child q' }], parent })
     const result = await run.result
@@ -135,31 +142,95 @@ describe('dsh-subagent-fork-in-process', () => {
     await run.dispose()
   })
 
-  it('produces an invariant-CLEAN seed: forking mid-turn excludes the open turn', async () => {
-    // Drive the parent so it has one completed turn, then start a SECOND turn that is still
-    // open (a hanging model call), and fork while it's in flight. The seed must stop after the
-    // balanced first turn; including the open turn would fail invariant replay during start.
+  it('closes an inherited open turn without canceling the parent stream', async () => {
     const { ctx, parent } = await setup([textResponse('done'), 'hang', textResponse('child')])
     parent.followup(createUserMessage({ content: [{ type: 'text', text: 'q1' }], source: { kind: 'user' } }))
     await parent.whenIdle()
-    // Start a second turn that hangs (open turn/start + open step, never ends).
+    const streaming = Promise.withResolvers<undefined>()
+    ctx.on('session/event', (session, event) => {
+      if (session === parent.session && event.type === 'assistant/chunk' && event.data.turn === 2) streaming.resolve(undefined)
+    })
     parent.followup(createUserMessage({ content: [{ type: 'text', text: 'q2' }], source: { kind: 'user' } }))
-    await new Promise(r => setTimeout(r, 20)) // let the hanging turn open
+    await streaming.promise
+    const parentPrefix = parent.session.snapshotEvents()
 
-    // Forking now must NOT throw (the open second turn is excluded from the seed).
     const run = await start(ctx, 'fork', { prompt: [{ type: 'text', text: 'child q' }], parent })
     const result = await run.result
     expect(result.stopReason).toBe('completed')
     expect(text(result.output)).toBe('child')
 
     const child = ctx.agents.get(run.id)!
-    // The child's seed has exactly the ONE completed parent turn (the open one excluded).
     const seedTurnEnds = child.session.snapshotEvents().filter(e => e.type === 'turn/end')
-    // 1 from the seeded parent turn + 1 from the child's own completed turn.
-    expect(seedTurnEnds.length).toBe(2)
+    expect(seedTurnEnds.map(event => event.data.reason.kind)).toEqual(['completed', 'forked', 'completed'])
+    expect(child.session.inheritedEventCount).toBe(parentPrefix.length)
+    expect(child.session.snapshotEvents().slice(0, parentPrefix.length)).toEqual(parentPrefix)
+    expect(parent.status).toBe('running')
+    expect(parent.session.snapshotEvents().some(event => event.type === 'turn/end' && event.data.turn === 2)).toBe(false)
 
     parent.cancel({ kind: 'user' })
+    await parent.whenIdle()
     await run.dispose()
+  })
+
+  it('inherits current reasoning and completed tools while leaving pending execution and input with the parent', async () => {
+    const reasoning = 'The inspection proves that the child should review the shared state.'
+    const delegation: StreamChunk[] = [
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: reasoning },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } },
+      ...toolCallResponse('fork-call', 'delegate', {}).filter(chunk => chunk.type !== 'finish' && chunk.type !== 'usage')
+        .map(chunk => 'index' in chunk ? { ...chunk, index: chunk.index + 1 } : chunk),
+      ...toolCallResponse('later-call', 'later', {}).map(chunk => 'index' in chunk ? { ...chunk, index: chunk.index + 2 } : chunk),
+    ]
+    const { ctx, parent, adapter } = await setup([
+      toolCallResponse('inspect-call', 'inspect', {}), delegation, textResponse('child finding'), textResponse('parent done'),
+    ], 1)
+    let childSession: Session | undefined
+    let parentPrefix: readonly SessionEvent[] = []
+    let laterCalls = 0
+    ctx.tools.register(defineContentToolFixture({
+      name: 'inspect', description: 'Inspect shared state.', parameters: {},
+      execute: async () => [{ type: 'text', text: 'inspection evidence' }],
+    }))
+    ctx.tools.register(defineContentToolFixture({
+      name: 'later', description: 'Run after delegation.', parameters: {},
+      execute: async () => {
+        laterCalls += 1
+        return [{ type: 'text', text: 'later result' }]
+      },
+    }))
+    ctx.tools.register(defineContentToolFixture({
+      name: 'delegate', description: 'Delegate a review.', parameters: {},
+      execute: async () => {
+        parent.inject(createUserMessage({ content: [{ type: 'text', text: 'pending parent input' }], source: { kind: 'user' } }))
+        parentPrefix = parent.session.snapshotEvents()
+        const run = await start(ctx, 'fork', { prompt: [{ type: 'text', text: 'review the evidence' }], parent })
+        childSession = run.localAgent!.session
+        try {
+          return (await run.result).output
+        } finally {
+          await run.dispose()
+        }
+      },
+    }))
+
+    parent.followup(createUserMessage({ content: [{ type: 'text', text: 'investigate this new issue' }], source: { kind: 'user' } }))
+    await parent.whenIdle()
+    expect(childSession).toBeDefined()
+    if (childSession === undefined) throw new Error('expected a forked child session')
+    expect(childSession.inheritedEventCount).toBe(parentPrefix.length)
+    expect(childSession.snapshotEvents().slice(0, parentPrefix.length)).toEqual(parentPrefix)
+    expect(childSession.ownEvents().filter(event => event.type === 'tool/result').map(event => event.data.error?.code))
+      .toEqual(['TOOL_EXECUTION_NOT_INHERITED', 'TOOL_EXECUTION_NOT_INHERITED'])
+    const childRequest = JSON.stringify(adapter.requests[2]?.messages)
+    expect(childRequest).toContain('investigate this new issue')
+    expect(childRequest).toContain('inspection evidence')
+    expect(childRequest).toContain(reasoning)
+    expect(childRequest).not.toContain('pending parent input')
+    expect(childRequest).not.toContain('later result')
+    expect(JSON.stringify(adapter.requests[3]?.messages)).toContain('pending parent input')
+    expect(laterCalls).toBe(1)
+    expect(parent.session.snapshotEvents().some(event => event.type === 'turn/end' && event.data.reason.kind === 'forked')).toBe(false)
   })
 
   it('captures structured output through the shipped plugin (seeded child, driver runtime)', async () => {
@@ -210,6 +281,7 @@ describe('dsh-subagent-fork-in-process', () => {
 
   it('unregisters the provider when its fiber is disposed (HMR safety)', async () => {
     const ctx = new Context()
+    contexts.push(ctx)
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SubagentRuntime)
     await ctx.plugin(AgentRegistry)
@@ -219,13 +291,11 @@ describe('dsh-subagent-fork-in-process', () => {
     expect(ctx.subagents.list()).toEqual([])
   })
 
-  it('contributes the completed-turn prefix as a continuable child\'s seed', async () => {
+  it('captures a continuable child seed once before later parent turns', async () => {
     const { ctx, parent } = await setup([textResponse('parent turn'), textResponse('child answer')])
     const provider = ctx.subagents.getProvider('fork')!
     const signal = new AbortController().signal
 
-    // Before any completed parent turn there is nothing to inherit, so the
-    // child starts fresh rather than carrying an empty seed.
     const fresh = await provider.prepareContinuable!({
       sessionId: SessionId('continuable-fresh'),
       parent,
@@ -242,10 +312,16 @@ describe('dsh-subagent-fork-in-process', () => {
       signal,
     })
     expect(seeded.seed).toBeDefined()
-    const lastSeeded = seeded.seed!.at(-1)
+    const lastSeeded = seeded.seed!.events.at(-1)
     // The seed ends at a completed turn, so it replays as a valid child log.
     expect(lastSeeded?.type).toBe('turn/end')
-    expect(seeded.seed!.map(event => event.seq)).toEqual(seeded.seed!.map((_event, index) => index))
+    expect(seeded.seed!.events.map(event => event.seq)).toEqual(seeded.seed!.events.map((_event, index) => index))
+    expect(seeded.seed!.inheritedEventCount).toBe(parent.session.seq)
+    const captured = seeded.seed!.events
+    parent.followup(createUserMessage({ content: [{ type: 'text', text: 'later parent request' }], source: { kind: 'user' } }))
+    await parent.whenIdle()
+    expect(seeded.seed!.events).toBe(captured)
+    expect(JSON.stringify(captured)).not.toContain('later parent request')
   })
 
   it('has the namespace-plugin export shape (no stray default)', () => {

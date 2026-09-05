@@ -11,6 +11,7 @@ import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { ToolCallId, createUserMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { formatToolSchemasSnapshot } from '@deepseek-ai/dsh-session-snapshot'
 import {
   ScheduleId,
   createEveryScheduleRecord,
@@ -706,6 +707,12 @@ describe.skipIf(MODE === 'record')('web e2e: active Schedule catalog', () => {
 
     await openSession(page, CATALOG_TITLE)
     const parentAgent = await liveAgent(scaffold, CATALOG_SESSION_ID)
+    const assembly = await scaffold.ctx.systemPrompt.assemble({ scope: parentAgent })
+    await compareOrRefreshGolden(
+      join(CATALOG_SNAPSHOT_DIR, 'tool-schemas.expected.json'),
+      formatToolSchemasSnapshot(assembly.tools).trimEnd(),
+      MODE,
+    )
 
     const trigger = page.getByRole('button', { name: '3 reminders' })
     await trigger.waitFor({ timeout: 15_000 })

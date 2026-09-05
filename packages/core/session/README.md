@@ -57,7 +57,9 @@ Session log positions use two numeric types. `SessionSeq` identifies an existing
 
 ### Fork a session
 
-`ctx.sessions.fork(source, boundary?, childSessionId?)` selects source events through an inclusive `boundary` seq (default: the current last event), requires the prefix to end outside an open turn, and creates a live child session with lineage metadata. A tool-time delegation that must branch mid-turn clips to a completed prefix instead.
+`ctx.sessions.fork(source, boundary?, childSessionId?)` selects source events through an inclusive `boundary` seq (default: the current last event), requires the prefix to end outside an open turn, and creates a live child session with lineage metadata.
+
+`session.snapshotForFork()` prepares immutable seed data for delegation during a turn. It retains all committed parent events, including current messages and reasoning, and adds child-only results for unfinished tool calls before closing their step and turn with reason `forked`. The parent keeps running. The returned `SessionForkSeed` separates complete `events` from their real parent-prefix `inheritedEventCount`, so pending parent inbox items are not child work. Raw stream chunks without an assembled message remain log-only.
 
 The logical `SessionHeader.isSeeded` field reports whether fork history exists without exposing a positional integer. `Session.inheritedEventCount` retains the exact checked `SessionLogOffset`; `ownEvents()` returns events at and after that cut, and `isOwnSeq(seq)` accepts only an existing child-owned position. A low-level seeded constructor must supply an explicit `seed` and `inheritedEventCount` because the constructor seed can contain child-owned setup events after the inherited prefix.
 
@@ -93,7 +95,7 @@ The package is built on event sourcing: a `Session` is an append-only log of typ
 | [`src/request-header.ts`](src/request-header.ts) | `request/header` folding and reconstruction |
 | [`dsh-util-values`](../../util/values/README.md) | Shared lossless JSON validation and detached snapshots |
 | [`src/chunk-rows.ts`](src/chunk-rows.ts) | Shared compact-row storage codec for persistence backends |
-| [`src/repair.ts`](src/repair.ts) | Cold repair of crash-orphaned logs |
+| [`src/repair.ts`](src/repair.ts) | Shared turn closure for crash recovery and fork snapshots |
 | [`src/invariant.ts`](src/invariant.ts) | Invariant companion: seq, turn/step enclosure, tool call/result pairing |
 
 ### Append validation
@@ -155,6 +157,20 @@ Zero tokens in an intact session. Each repaired call adds its retained risk-spec
 #### KV Cache effect
 
 Append-only; newly visible content follows the reusable request prefix and does not invalidate existing KV-cache entries.
+
+### Fork-snapshot tool result
+
+#### What the model sees
+
+An unfinished inherited call receives a `TOOL_EXECUTION_NOT_INHERITED` result: `This tool call belongs to the parent agent. Its result was not available when this conversation was forked. The parent retains responsibility for it; do not execute or retry it. Continue with your delegated task.` The result records no execution or cancellation in the parent.
+
+#### Token effect
+
+One fixed result per unfinished inherited call, retained in the child until compaction replaces it.
+
+#### KV Cache effect
+
+Closing results follow the inherited message prefix; they do not rewrite its earlier tokens.
 
 ### Logged request header
 

@@ -248,11 +248,10 @@ interface ContinuableCreateRequest {
  */
 interface ContinuableCreateSpec {
   /**
-   * Completed-turn prefix of the parent's log to seed the child session with,
-   * or absent for a fresh child. Same durable contract as
-   * `CreateAgentOptions.seed`: contiguous from seq 0, lossless JSON, balanced.
+   * Parent context and child-owned execution closures captured once at creation,
+   * or absent for a fresh child. The inherited count excludes the closures.
    */
-  readonly seed?: readonly SessionEvent[]
+  readonly seed?: SessionForkSeed
 }
 ```
 
@@ -409,7 +408,7 @@ interface SubagentProvider {
   /** The start-time features this provider supports (see {@link SubagentCapabilities}). */
   readonly capabilities: SubagentCapabilities
   /**
-   * Whether the child sees the parent's completed-turn prefix. This is descriptive, not a
+   * Whether the child sees the parent's committed conversation at creation. This is descriptive, not a
    * service-validated start capability: the model-facing tool derives truthful wording from it.
    * It says nothing about tool registration, injected services, or authority inheritance.
    */
@@ -459,7 +458,7 @@ interface SubagentProvider {
 spawn 和 fork 后端通过 `parent.ctx` 创建一个普通的单次 agent，将取消信号传入核心创建流程，并通过 `AgentHandle` 进行 dispose；而可继续子 agent 则由继续执行管理器通过其自己的 activation-owner 作用域创建。移除提供方会阻止新的 start，但不会撤销已接受的 run。每个子 agent 获得一个新的扁平作用域，而非继承父级注册。深度与 fork 种子注入复用既有的 agent 和会话词汇：
 
 - **委派深度**由持久 `SessionHeader.delegationDepth` 与可合并扩展的运行时字段 `AgentOptions.subagentDepth` 共同表示；缺失表示顶层深度为零，存在的较大值具有权威性。两个字段都归该 seam 所有——循环既不设置也不读取它们——因此进程内子 agent 会持久保存 parent 深度 + 1，冷恢复无法降低深度，而且每次 start 都会拒绝超出安全整数域、或高于已定义绝对 `request.maxDepth` 上限的派生深度。
-- **Fork 种子注入**使用 [`CreateAgentOptions.seed`](core.zh.md#creation-and-ownership)（一个 `SessionEvent[]` 前缀，经由 `AgentLoop.createAgent` → `ctx.sessions.prepare({ seed })` 传递，与 `ctx.agents.resume()` 使用的原语相同）。fork 后端传入父级日志的一段*平衡的已完成轮次前缀*——父级事件直到并包括其最后一个 `turn/end`——因此种子从 0 连续，[invariants](../../packages/runtime-diagnostics/invariants) 回放可以接受它（进行中的、未平衡的轮次被排除在外）。
+- **Fork 种子注入**使用 [`CreateAgentOptions.seed`](core.zh.md#creation-and-ownership)（一个 `SessionEvent[]` 前缀，经由 `AgentLoop.createAgent` → `ctx.sessions.prepare({ seed })` 传递，与 `ctx.agents.resume()` 使用的原语相同）。fork 后端通过 `Session.snapshotForFork()` 取得 `SessionForkSeed`，保留当前轮次已提交上下文及仅属于子级的闭合记录。创建方分别传递其中的事件和精确继承前缀长度，使 [invariants](../../packages/runtime-diagnostics/invariants) 接受子会话，同时不转移父级未完成的执行。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

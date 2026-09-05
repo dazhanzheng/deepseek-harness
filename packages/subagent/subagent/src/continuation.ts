@@ -463,8 +463,8 @@ export class SubagentContinuationManager {
     spec.signal.throwIfAborted()
     this.assertAdmitting(parent)
 
-    const inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0)
-    const seed = seedDescriptorTurn(childId, prepared.seed, descriptor)
+    const inheritedEventCount = prepared.seed?.inheritedEventCount ?? SessionLogOffset(0)
+    const seed = seedDescriptorTurn(childId, prepared.seed?.events, descriptor)
     const messageId = await this.locks.run(childId, async () => {
       spec.signal.throwIfAborted()
       this.assertAdmitting(parent)

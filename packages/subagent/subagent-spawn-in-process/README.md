@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-subagent-spawn-in-process` is an in-process subagent backend: it runs each delegated task in a fresh child agent that shares this process and its agent factory, LLM, and tool services. The child starts with an empty conversation, so a task prompt must stand alone; it inherits the parent's working directory, session lineage, provider, model, reasoning effort, and output-token limit unless `request.agentOptions` overrides them. A delegation tool or API call reaches it under the `spawn` provider name. Choose it for the cheapest delegation transport; choose the fork backend when the child must build on the parent's completed conversation turns.
+`dsh-subagent-spawn-in-process` is an in-process subagent backend: it runs each delegated task in a fresh child agent that shares this process and its agent factory, LLM, and tool services. The child starts with an empty conversation, so a task prompt must stand alone; it inherits the parent's working directory, session lineage, provider, model, reasoning effort, and output-token limit unless `request.agentOptions` overrides them. A delegation tool or API call reaches it under the `spawn` provider name. Choose it for the cheapest delegation transport; choose the fork backend when the child must build on the parent's committed conversation.
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@ Mount this backend in a composition that delegates work to fresh in-process chil
 
 ### When to choose it
 
-Choose the spawn backend when the child needs no parent conversation and running in this process is acceptable. Avoid it when the child must build on completed parent turns — the fork backend seeds that history — or when the child must run outside this process, which the out-of-process backends provide. Because the child inherits the parent's working directory and LLM selection by default, a self-contained prompt behaves exactly as written.
+Choose the spawn backend when the child needs no parent conversation and running in this process is acceptable. Avoid it when the child must build on committed parent context — the fork backend seeds that history — or when the child must run outside this process, which the out-of-process backends provide. Because the child inherits the parent's working directory and LLM selection by default, a self-contained prompt behaves exactly as written.
 
 ### Minimal configuration
 
@@ -93,7 +93,7 @@ Read these pages when the package-level contract is not enough; they move from t
 
 - [Subagent subsystem](../../../docs/subsystems/subagent.md) — start requests, results, live runs, and the provider contract.
 - [dsh-subagent-in-process-driver](../subagent-in-process-driver/README.md) — the shared run driver this backend calls.
-- [dsh-subagent-fork-in-process](../subagent-fork-in-process/README.md) — the sibling backend that seeds completed parent turns.
+- [dsh-subagent-fork-in-process](../subagent-fork-in-process/README.md) — the sibling backend that seeds committed parent context.
 - [dsh-tool-subagent](../tool-subagent/README.md) — the model-facing delegation tool that reaches this provider.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-spawn-in-process) — every accepted config field and its source declaration.
 
@@ -137,7 +137,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when the backend is the wrong choice; they are current package constraints.
 
-- **Fresh means no parent transcript** — the child inherits cwd, lineage, provider, model, reasoning effort, output-token limit, and explicitly configured persona or tool restrictions, but none of the parent's conversation; use the fork backend when completed-turn context is required.
+- **Fresh means no parent transcript** — the child inherits cwd, lineage, provider, model, reasoning effort, output-token limit, and explicitly configured persona or tool restrictions, but none of the parent's conversation; use the fork backend when committed parent context is required.
 
 <a id="dev-note"></a>
 ### Dev Note

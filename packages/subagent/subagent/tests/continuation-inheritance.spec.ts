@@ -15,6 +15,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import SandboxPolicyService, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -24,7 +25,8 @@ import { queueHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import * as SubagentFork from '@deepseek-ai/dsh-subagent-fork-in-process'
 import * as SubagentSpawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
-import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import SubagentRuntime from '../src/index.ts'
 import { TestSessionQuery } from './test-session-query.ts'
 
@@ -53,9 +55,10 @@ async function setup(script: Script) {
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(SubagentSpawn, { providerName: 'spawn' })
   await ctx.plugin(SubagentFork, { providerName: 'fork' })
-  ctx.llm.registerAdapter(['mock'], new MockAdapter(script))
+  const adapter = new MockAdapter(script)
+  ctx.llm.registerAdapter(['mock'], adapter)
   const parent = ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
-  return { ctx, parent }
+  return { ctx, parent, adapter }
 }
 
 function startSpec(parent: Agent, provider = 'spawn') {
@@ -226,7 +229,6 @@ describe('continuable policy inheritance', () => {
 
   it('places inherited events after a fork prefix so fresh policy wins stale seed state', { timeout: 20_000 }, async () => {
     const { ctx, parent } = await setup([textResponse('parent turn'), textResponse('forked child')])
-    // The stale mode lands inside the completed turn the fork seed replays.
     setSandboxMode(parent.session, 'workspace-write')
     parent.followup(createUserMessage({
       content: [{ type: 'text', text: 'parent work' }],
@@ -243,8 +245,62 @@ describe('continuable policy inheritance', () => {
     expect(loaded.inheritedEventCount).toBeGreaterThan(0)
     expect(loaded.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
       { data: { mode: 'workspace-write' } },
+      { data: { mode: 'read-only' } },
       { data: { mode: 'read-only', source: 'delegation' } },
     ])
     expect(foldedSandboxMode(ctx, started.childId, loaded.events)).toBe('read-only')
+  })
+
+  it('cold-resumes the current-turn fork without inheriting parent execution or later context', async () => {
+    const reasoning = 'This current turn establishes the review context.'
+    const chunks: StreamChunk[] = [
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: reasoning },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } },
+      ...toolCallResponse('delegate-call', 'delegate', {}).map(chunk => 'index' in chunk ? { ...chunk, index: chunk.index + 1 } : chunk),
+    ]
+    const { ctx, parent, adapter } = await setup([
+      chunks, textResponse('first child answer'), textResponse('parent answer'), textResponse('resumed child answer'),
+    ])
+    let childId: SessionId | undefined
+    let parentPrefix: readonly SessionEvent[] = []
+    ctx.tools.register(defineContentToolFixture({
+      name: 'delegate', description: 'Delegate a review.', parameters: {},
+      execute: async () => {
+        parentPrefix = parent.session.snapshotEvents()
+        const started = await ctx.subagents.startContinuable(startSpec(parent, 'fork'))
+        childId = started.childId
+        await waitNoActivation(ctx, childId)
+        return [{ type: 'text', text: 'review settled' }]
+      },
+    }))
+    parent.followup(createUserMessage({ content: [{ type: 'text', text: 'current user assignment' }], source: { kind: 'user' } }))
+    await parent.whenIdle()
+    expect(childId).toBeDefined()
+    if (childId === undefined) throw new Error('expected a continuable fork')
+    const initial = await ctx.sessionPersistence.load(childId)
+    expect(initial.inheritedEventCount).toBe(parentPrefix.length)
+    expect(initial.events.slice(0, initial.inheritedEventCount)).toEqual(parentPrefix)
+    const own = initial.events.slice(initial.inheritedEventCount)
+    expect(own.find(event => event.type === 'turn/end')?.data.reason.kind).toBe('forked')
+    expect(own.filter(event => event.type === 'subagent/descriptor')).toHaveLength(1)
+    expect(JSON.stringify(adapter.requests[1]?.messages)).toContain(reasoning)
+
+    ctx.on('agent/pre-step', async ({ agent }, next) => agent === parent ? { kind: 'reject' as const } : next())
+    parent.inject(createUserMessage({ content: [{ type: 'text', text: 'later parent context' }], source: { kind: 'user' } }))
+    await queueHostSubagentPrompt(
+      ctx.subagents, parent, childId, [{ type: 'text', text: 'continue the review' }], { kind: 'user' }, new AbortController().signal,
+    )
+    await waitNoActivation(ctx, childId)
+    const resumed = await ctx.sessionPersistence.load(childId)
+    expect(resumed.inheritedEventCount).toBe(initial.inheritedEventCount)
+    expect(resumed.events.slice(0, initial.inheritedEventCount)).toEqual(parentPrefix)
+    expect(resumed.events.filter(event => event.type === 'turn/end' && event.data.reason.kind === 'forked')).toHaveLength(1)
+    expect(resumed.events.slice(initial.inheritedEventCount).filter(event => event.type === 'subagent/descriptor')).toHaveLength(1)
+    const resumedRequest = JSON.stringify(adapter.requests[3]?.messages)
+    expect(resumedRequest).toContain('current user assignment')
+    expect(resumedRequest).toContain(reasoning)
+    expect(resumedRequest).toContain('continue the review')
+    expect(resumedRequest).not.toContain('later parent context')
   })
 })

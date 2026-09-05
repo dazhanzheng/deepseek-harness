@@ -534,6 +534,14 @@ declare class Session {
    */
   requestContext(): RequestContext | undefined;
   /**
+   * Snapshot committed history for a child, retaining the current turn's messages.
+   * Child-only records close unfinished tools and their step/turn without changing
+   * the parent or transferring its pending work. Unanchored stream chunks stay
+   * log-only; only committed messages enter the child's model history.
+   * @returns immutable seed events with their exact parent-prefix length.
+   */
+  snapshotForFork(): SessionForkSeed;
+  /**
    * Derive the LLM message history by walking the ordered sequences of
    * message-producing events maintained by `surfaceOp` markers. The
    * surface is the single source of derived history: every message-producing
@@ -562,6 +570,20 @@ declare class Session {
 }
 ```
 
+## 实时 fork 种子：`SessionForkSeed`
+
+`Session.snapshotForFork()` 返回已提交父上下文及仅属于子级的闭合记录，不发布子会话，也不改变父级。创建方将 `events` 作为 seed，并单独传递 `inheritedEventCount`；详见 [Session 包](../../packages/core/session/README.zh.md)。
+
+```ts type-equiv
+/** Immutable fork history, including child-owned records that close inherited work. */
+interface SessionForkSeed {
+  /** Parent events followed by any child-only tool results and step/turn endings. */
+  readonly events: readonly SessionEvent[]
+  /** Exact parent prefix length; excludes the child-only closing records. */
+  readonly inheritedEventCount: SessionLogOffset
+}
+```
+
 ## 派生历史：`deriveMessages()` 与 `deriveEventMessage()`
 
 `Session.deriveMessages()` 将事件日志投影为模型看到的 `Message[]`。它是缓存的（每个 surface 节点在首次出现时投影一次；surface 重写触发重建）且冻结的（每次调用返回一个新数组，引用共享的深冻结消息，因此通过投影修改已记录的历史在类型上不可表达）。`deriveEventMessage(event)` 是折叠所应用的逐节点纯函数，公开暴露以便外部重建器和开发不变式检查能以完全相同的规则投影日志前缀，不会与缓存产生分歧。投影规则：
@@ -579,7 +601,7 @@ declare class Session {
 
 - `fork(source, boundary?, childSessionId?)` 接受一个活跃的 `Session` 对象或活跃的 `SessionId`，选取到 `SessionSeq` boundary（含）为止的源事件（默认为当前最后一个事件），要求所选前缀结束时没有开放轮次，然后创建一个活跃的子会话，包含深克隆的 seed event、`parentSession`、`isSeeded: true`、精确 `inheritedEventCount` 及继承的 `cwd`。
 
-显式 `boundary` 允许调用者从任意稳定的轮次间位置 fork，包括之前的 `turn/end` 或更晚的独立纯日志事件，即使源会话有更新的事件或正在进行的轮次。API 拒绝结束于开放轮次内的前缀，而不是静默截断。更广泛的执行关系健全性检查留在既有的 `dsh-invariants` 插件和持久化修复路径中，不在 `fork()` 中重复。`dsh-subagent-fork-in-process` 保留其已完成前缀截断逻辑，因为工具调用时的委托通常在父轮次仍然打开时启动；普通的会话分支应显式指定请求的 boundary。
+显式 `boundary` 允许调用者从任意稳定的轮次间位置 fork，包括之前的 `turn/end` 或更晚的独立纯日志事件，即使源会话有更新的事件或正在进行的轮次。API 拒绝结束于开放轮次内的前缀，而不是静默截断。更广泛的执行关系健全性检查留在既有的 `dsh-invariants` 插件和持久化修复路径中，不在 `fork()` 中重复。工具时委派使用 `Session.snapshotForFork()` 保留当前轮次上下文，并添加仅属于子级的闭合记录；普通会话分支保留显式稳定边界策略。
 
 <a id="why-a-turn-ended-turnendreasonmap"></a>
 
@@ -615,10 +637,12 @@ interface TurnEndReasonMap {
    * emits this marker, and the events recorded before the crash remain intact.
    */
   interrupted: { kind: 'interrupted' }
+  /** A child snapshot closes inherited work without stopping its parent. */
+  forked: { kind: 'forked' }
 }
 ```
 
-`max-tokens` 与模型调用中同名的 `FinishReason` 对应：只要轮次内有任何步骤以 `max-tokens` 结束，整个轮次就以 `max-tokens` 而不是 `completed` 结束（即使之后继续执行，截断事实仍优先），让消费方能够区分正常停止和截断停止。取消和错误仍是不同的结果。`interrupted` 是唯一不会由任何 loop 发出的原因：它由崩溃恢复合成（见 [persistence.md](persistence.zh.md)）。该 map 可通过合并扩展。
+`max-tokens` 与模型调用中同名的 `FinishReason` 对应：只要轮次内有任何步骤以 `max-tokens` 结束，整个轮次就以 `max-tokens` 而不是 `completed` 结束（即使之后继续执行，截断事实仍优先），让消费方能够区分正常停止和截断停止。取消和错误仍是不同的结果。`interrupted` 由崩溃恢复合成（见 [persistence.md](persistence.zh.md)）；`forked` 在子快照中闭合继承的工作，父级继续运行。这两种原因均不由循环发出。该 map 可通过合并扩展。
 
 ## 执行封闭与独立事件
 

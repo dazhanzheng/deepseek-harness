@@ -1,7 +1,6 @@
 /**
- * Crash-recovery repair for an interrupted session log. It preserves a fully
- * written final turn and supplies the missing tool, step, and turn boundaries
- * needed to resume with a provider-valid transcript.
+ * Closing records for crash recovery and fork snapshots. Both preserve committed
+ * history and balance pending tool calls before closing their step and turn.
  * @module @deepseek-ai/dsh-session/repair
  */
 
@@ -17,6 +16,9 @@ export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED'
 /** Recovery code for a recorded tool call whose completed outcome was not durably recorded. */
 export const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN'
 
+/** A parent-owned call has no recorded result in a child's fork snapshot. */
+export const TOOL_EXECUTION_NOT_INHERITED = 'TOOL_EXECUTION_NOT_INHERITED'
+
 /**
  * Return deterministic synthetic events that close an open tail turn. Unmatched
  * calls receive error results first, followed by an open `step/end` and an
@@ -27,6 +29,20 @@ export const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN'
  * @returns the synthetic closer events to append after `events`, in order; empty when the log is already balanced.
  */
 export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
+  return turnClosers(events, 'interrupted')
+}
+
+/**
+ * Close inherited work only in a child snapshot; execution remains owned by the parent.
+ * @param events - the parent's committed log snapshot.
+ * @returns child-only tool results and step/turn endings; empty for balanced history.
+ */
+export function forkTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
+  return turnClosers(events, 'forked')
+}
+
+/** Balance one committed tail with the outcome owned by recovery or the child snapshot. */
+function turnClosers(events: readonly SessionEvent[], kind: 'interrupted' | 'forked'): SessionEvent[] {
   let openTurn: number | null = null
   let openStep: number | null = null
   // Reset at each turn boundary so earlier calls cannot leak into tail repair.
@@ -92,8 +108,9 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
   // and Map insertion order preserves their transcript order.
   for (const [callId, { step, callSeq }] of pendingCalls) {
     const started = callSeq !== undefined
+    const forked = kind === 'forked'
     const message: ToolResultMessage = deepFreeze({
-      id: brandString<MessageId>(`interrupted-tool-result-${callId}-${seq}`),
+      id: brandString<MessageId>(`${kind}-tool-result-${callId}-${seq}`),
       role: 'user',
       source: { kind: 'tool', callId },
       content: [{
@@ -102,9 +119,11 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
         isError: true,
         content: [{
           type: 'text',
-          text: started
-            ? 'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.'
-            : 'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.',
+          text: forked
+            ? 'This tool call belongs to the parent agent. Its result was not available when this conversation was forked. The parent retains responsibility for it; do not execute or retry it. Continue with your delegated task.'
+            : started
+              ? 'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.'
+              : 'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.',
         }],
       }],
     })
@@ -116,9 +135,11 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
         turn: openTurn,
         step,
         message,
-        error: started
-          ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
-          : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
+        error: forked
+          ? { name: 'ToolExecutionNotInheritedError', code: TOOL_EXECUTION_NOT_INHERITED }
+          : started
+            ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
+            : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
       },
       surfaceOp: 'append',
       ...started ? { sourceEventSeqs: [callSeq] } : {},
@@ -130,6 +151,6 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
   if (openStep !== null) {
     closers.push({ type: 'step/end', seq: SessionSeq(seq++), time, data: { turn: openTurn, step: openStep } })
   }
-  closers.push({ type: 'turn/end', seq: SessionSeq(seq++), time, data: { turn: openTurn, reason: { kind: 'interrupted' } } })
+  closers.push({ type: 'turn/end', seq: SessionSeq(seq++), time, data: { turn: openTurn, reason: { kind } } })
   return closers
 }

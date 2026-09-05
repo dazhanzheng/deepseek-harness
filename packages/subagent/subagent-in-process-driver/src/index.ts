@@ -17,7 +17,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionLogOffset as SessionLogOffsetType, TurnEndReason } from '@deepseek-ai/dsh-session'
+import type { SessionForkSeed, SessionId, SessionLogOffset as SessionLogOffsetType, TurnEndReason } from '@deepseek-ai/dsh-session'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import {
   appendDelegatedPolicyOverrides,
@@ -68,8 +68,8 @@ function toStopReason(reason: TurnEndReason | undefined): SubagentStopReason {
 
 /** Extra inputs the spawn and fork providers supply to the shared driver. */
 export interface InProcessRunOptions {
-  /** Completed-turn seed for fork, or undefined for a fresh spawn. */
-  readonly seed?: readonly SessionEvent[]
+  /** Captured parent context with child-owned execution closures, or absent for a fresh spawn. */
+  readonly seed?: SessionForkSeed
 }
 
 /** Error used when cancellation wins before the child publication boundary. */
@@ -112,7 +112,7 @@ export async function startInProcessRun(
 
   const childId = brandString<SessionId>(randomUUID())
   const seed = options.seed
-  const activationBoundary = SessionLogOffset(seed?.length ?? 0)
+  const activationBoundary = SessionLogOffset(seed?.events.length ?? 0)
 
   // Capture before the first await: a later parent switch belongs to the
   // parent's future.
@@ -134,8 +134,7 @@ export async function startInProcessRun(
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
     meta: childSessionMeta(parent, childDepth, seed !== undefined),
-    ...seed !== undefined ? { seed } : {},
-    ...seed === undefined ? {} : { inheritedEventCount: activationBoundary },
+    ...seed === undefined ? {} : { seed: seed.events, inheritedEventCount: seed.inheritedEventCount },
     agentOptions: resolveChildAgentOptions(parent, request.agentOptions, childDepth),
     signal: request.signal,
     setup,

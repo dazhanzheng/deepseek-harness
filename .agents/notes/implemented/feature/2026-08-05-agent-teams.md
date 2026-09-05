@@ -26,7 +26,7 @@ Creation first appends and flushes a `team/member` provisioning snapshot in the 
 
 A root recovery reconciles an unterminated provisioning record against the child's independently persisted Session. Matching direct-parent and continuable descriptors plus a recorded initial user message prove successful admission and produce active; absence, corruption, mismatched provider/lineage, or a missing admitted message produces failed. The creator re-reads the terminal phase under the same Lead-log serializer; if recovery marked failed while creation succeeded, it drains the child and reports a provisioning conflict instead of retaining an orphan. This avoids reconstructing an initial prompt that was never retained in the Team log and contains plugin-reload races.
 
-Fresh children have no inherited conversation. Fork children capture the Lead's completed-turn prefix once and retain it as their own durable seed. The current delegation turn remains excluded, matching the existing fork provider contract.
+Fresh children have no inherited conversation. Fork children capture the Lead's committed context once and retain it as their own durable seed. The [live-fork decision](../architecture/2026-09-05-live-subagent-fork-snapshots.md) owns current-turn inheritance and child-only closing records.
 
 ## Mailbox and task transactions
 

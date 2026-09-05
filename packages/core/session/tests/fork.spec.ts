@@ -142,6 +142,7 @@ describe('SessionStore.fork', () => {
       { kind: 'aborted', reason: { kind: 'disposed' } },
       { kind: 'max-tokens' },
       { kind: 'interrupted' },
+      { kind: 'forked' },
     ]
 
     for (const [index, reason] of reasons.entries()) {

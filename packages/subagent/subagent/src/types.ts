@@ -12,7 +12,7 @@
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionForkSeed, SessionId } from '@deepseek-ai/dsh-session'
 import type { ObjectJsonSchema, ToolRestriction } from '@deepseek-ai/dsh-tools'
 import type { SubagentDescriptorData } from './descriptor.ts'
 
@@ -192,11 +192,10 @@ export interface ContinuableCreateRequest {
  */
 export interface ContinuableCreateSpec {
   /**
-   * Completed-turn prefix of the parent's log to seed the child session with,
-   * or absent for a fresh child. Same durable contract as
-   * `CreateAgentOptions.seed`: contiguous from seq 0, lossless JSON, balanced.
+   * Parent context and child-owned execution closures captured once at creation,
+   * or absent for a fresh child. The inherited count excludes the closures.
    */
-  readonly seed?: readonly SessionEvent[]
+  readonly seed?: SessionForkSeed
 }
 
 /**
@@ -303,7 +302,7 @@ export interface SubagentProvider {
   /** The start-time features this provider supports (see {@link SubagentCapabilities}). */
   readonly capabilities: SubagentCapabilities
   /**
-   * Whether the child sees the parent's completed-turn prefix. This is descriptive, not a
+   * Whether the child sees the parent's committed conversation at creation. This is descriptive, not a
    * service-validated start capability: the model-facing tool derives truthful wording from it.
    * It says nothing about tool registration, injected services, or authority inheritance.
    */

@@ -280,7 +280,7 @@ Spawn and fork share one in-process driver. It creates the child through `parent
 
 The provider awaits creation and returns only the published run. At the handoff, core creation detaches its creation-only abort listener; the provider immediately rechecks the signal before installing the live-run listener, so an abort in that narrow interval disposes the new handle instead of escaping cancellation. Parent teardown follows the child because the operation belongs to `parent.ctx`; provider unload blocks new starts but does not become a second revocation owner for accepted runs. The run disposer cancels the child and awaits the AgentHandle's ordered teardown.
 
-Spawn uses an empty session seed. Fork uses a validated completed-turn prefix. Conversation seeding changes history only and does not import scope, tools, services, or authority.
+Spawn uses an empty session seed. Fork uses a Session-owned committed-context snapshot with child-only closing records. Conversation seeding changes history only and does not import scope, tools, services, or authority.
 
 ### ACP providers own the process until readiness or cleanup
 

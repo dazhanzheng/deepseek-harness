@@ -142,7 +142,7 @@ describe('in-process policy inheritance', () => {
     const { ctx, parent } = await setupWalled(script)
     const blocked = join(workspace, 'fork-blocked.txt')
     setSandboxMode(parent.session, 'workspace-write')
-    const seed = parent.session.snapshotEvents()
+    const seed = parent.session.snapshotForFork()
     setSandboxMode(parent.session, 'read-only')
     script.push(
       toolCallResponse('write', 'write', { file_path: blocked, content: 'escaped' }),
@@ -156,7 +156,7 @@ describe('in-process policy inheritance', () => {
 
       expect(child.session.header.isSeeded).toBe(true)
       expect(child.session.inheritedEventCount).toBe(1)
-      expect(child.session.firstLiveSeq).toBe(seed.length)
+      expect(child.session.firstLiveSeq).toBe(seed.events.length)
       // seq 1 is the constructor's end-seed marker.
       expect(child.session.snapshotEvents().filter(event => event.type === 'sandbox/mode')).toMatchObject([
         { seq: 0, data: { mode: 'workspace-write' } },
