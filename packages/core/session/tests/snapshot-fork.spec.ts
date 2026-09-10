@@ -37,11 +37,13 @@ function beginTurn(session: Session): void {
 }
 
 function createChild(sessions: SessionStore, parent: Session, seed: SessionForkSeed): Session {
-  return sessions.create(undefined, {
+  const child = sessions.create(undefined, {
     seed: seed.events,
     inheritedEventCount: seed.inheritedEventCount,
     meta: { isSeeded: true, parentSession: parent.id },
   })
+  child.appendForkClosers(seed.closers)
+  return child
 }
 
 function toolResults(events: readonly SessionEvent[]): SessionEvent<'tool/result'>[] {
@@ -57,6 +59,7 @@ describe('Session.snapshotForFork', () => {
     parent.append('assistant/message', {
       turn: 1, step: 1,
       message: assistant([{ type: 'reasoning', text: 'Inspect the current implementation first.' }, earlierCall]),
+      stream: [],
     }, { surfaceOp: 'append' })
     parent.append('tool/call', { turn: 1, step: 1, callId: earlierCall.id, name: earlierCall.name, arguments: earlierCall.arguments })
     parent.append('tool/result', {
@@ -69,6 +72,7 @@ describe('Session.snapshotForFork', () => {
     parent.append('assistant/message', {
       turn: 1, step: 2,
       message: assistant([{ type: 'reasoning', text: 'Delegate the follow-up using the evidence.' }, ...calls]),
+      stream: [],
     }, { surfaceOp: 'append' })
     const [answered, fork] = calls
     if (answered === undefined || fork === undefined) throw new Error('missing fixture calls')
@@ -82,10 +86,10 @@ describe('Session.snapshotForFork', () => {
     const originalMessages = parent.deriveMessages()
 
     const seed = parent.snapshotForFork()
-    const closers = seed.events.slice(seed.inheritedEventCount)
+    const closers = seed.closers
     const results = toolResults(closers)
     expect(seed.inheritedEventCount).toBe(originalEvents.length)
-    expect(seed.events.slice(0, seed.inheritedEventCount)).toEqual(originalEvents)
+    expect(seed.events).toEqual(originalEvents)
     expect(closers.map(event => event.type)).toEqual(['tool/result', 'tool/result', 'step/end', 'turn/end'])
     expect(results.map(event => event.data.message.source.callId)).toEqual(['fork', 'not-started'])
     for (const result of results) {
@@ -103,7 +107,11 @@ describe('Session.snapshotForFork', () => {
     expect(child.deriveMessages()).toEqual([...originalMessages, ...results.map(event => event.data.message)])
     expect(child.inheritedEventCount).toBe(originalEvents.length)
     expect(child.snapshotEvents(SessionLogOffset(0), child.inheritedEventCount)).toEqual(originalEvents)
-    expect(child.ownEvents()).toEqual([...closers, expect.objectContaining({ type: 'session/end-seed' })])
+    const own = child.ownEvents()
+    expect(own[0]).toMatchObject({ type: 'session/end-seed' })
+    expect(own.slice(1).map(event => event.type)).toEqual(closers.map(event => event.type))
+    expect(own.slice(1).map(event => event.type === 'tool/result' ? event.data.message.source.callId : null))
+      .toEqual(closers.map(event => event.type === 'tool/result' ? event.data.message.source.callId : null))
     expect(parent.snapshotEvents()).toBe(originalEvents)
     expect(parent.deriveMessages()).toEqual(originalMessages)
 
@@ -118,8 +126,8 @@ describe('Session.snapshotForFork', () => {
       turn: 1, step: 2,
       message: createToolResultMessage({ callId: fork.id, content: [{ type: 'text', text: 'Started child.' }], isError: false }),
     }, { surfaceOp: 'append' })
-    expect(seed.events.slice(0, seed.inheritedEventCount)).toEqual(originalEvents)
-    expect(toolResults(seed.events).find(event => event.data.message.source.callId === fork.id)?.data.error?.code)
+    expect(seed.events).toEqual(originalEvents)
+    expect(toolResults(seed.closers).find(event => event.data.message.source.callId === fork.id)?.data.error?.code)
       .toBe(TOOL_EXECUTION_NOT_INHERITED)
   })
 
@@ -129,10 +137,11 @@ describe('Session.snapshotForFork', () => {
     beginTurn(parent)
     parent.append('assistant/message', {
       turn: 1, step: 1, message: assistant([toolCall('pending')]),
+      stream: [],
     }, { surfaceOp: 'append' })
 
     const seed = parent.snapshotForFork()
-    const result = toolResults(seed.events)[0]
+    const result = toolResults(seed.closers)[0]
     if (result === undefined) throw new Error('missing synthetic result')
     expect(Object.isFrozen(seed.events)).toBe(true)
     expect(Object.isFrozen(result)).toBe(true)
@@ -168,29 +177,35 @@ describe('Session.snapshotForFork', () => {
     beginTurn(parent)
     parent.append('assistant/message', {
       turn: 1, step: 1, message: assistant([{ type: 'text', text: 'Committed response.' }]),
+      stream: [],
     }, { surfaceOp: 'append' })
     parent.append('step/end', { turn: 1, step: 1 })
 
     const seed = parent.snapshotForFork()
 
-    expect(seed.events.slice(seed.inheritedEventCount)).toEqual([
+    expect(seed.closers).toEqual([
       expect.objectContaining({ type: 'turn/end', data: { turn: 1, reason: { kind: 'forked' } } }),
     ])
     expect(createChild(sessions, parent, seed).deriveMessages()).toEqual(parent.deriveMessages())
   })
 
-  it('keeps incomplete stream chunks in the event log without projecting them into model history', async () => {
+  it('keeps unassembled attempt streams in the event log without projecting them into model history', async () => {
     const sessions = await setup()
     const parent = sessions.create()
     beginTurn(parent)
-    parent.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'Unfinished reasoning.' } })
-    parent.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 1, text: 'Unfinished response.' } })
+    parent.append('assistant/attempt', {
+      turn: 1, step: 1,
+      stream: [
+        { type: 'reasoning-chunks', time0: 0, index: 0, dt: [1], texts: ['Unfinished reasoning.'] },
+        { type: 'text-chunks', time0: 1, index: 1, dt: [1], texts: ['Unfinished response.'] },
+      ],
+    })
 
     const seed = parent.snapshotForFork()
     const child = createChild(sessions, parent, seed)
 
-    expect(seed.events.slice(0, seed.inheritedEventCount)).toEqual(parent.snapshotEvents())
-    expect(seed.events.slice(seed.inheritedEventCount).map(event => event.type)).toEqual(['step/end', 'turn/end'])
+    expect(seed.events).toEqual(parent.snapshotEvents())
+    expect(seed.closers.map(event => event.type)).toEqual(['step/end', 'turn/end'])
     expect(child.deriveMessages()).toEqual(parent.deriveMessages())
     expect(child.deriveMessages().map(message => message.role)).toEqual(['user'])
   })
@@ -202,6 +217,7 @@ describe('Session.snapshotForFork', () => {
     const call = toolCall('inspected')
     parent.append('assistant/message', {
       turn: 1, step: 1, message: assistant([call]),
+      stream: [],
     }, { surfaceOp: 'append' })
     parent.append('tool/call', { turn: 1, step: 1, callId: call.id, name: call.name, arguments: call.arguments })
     const original = parent.append('tool/result', {
@@ -216,7 +232,7 @@ describe('Session.snapshotForFork', () => {
       if (start === undefined || end === undefined) throw new Error('missing compactable surface')
       parent.append('user/message', createUserMessage({
         content: [{ type: 'text', text: 'Earlier investigation summary.' }], source: { kind: 'user' },
-      }), { surfaceOp: { op: 'replace', start, end }, sourceEventSeqs: sources })
+      }), { surfaceOp: { op: 'replace', startSeq: start, endSeq: end }, sourceEventSeqs: sources })
     } else {
       parent.append('tool/result', {
         ...original.data,
@@ -224,16 +240,17 @@ describe('Session.snapshotForFork', () => {
           ...original.data.message,
           content: [{ ...original.data.message.content[0], content: [{ type: 'text', text: 'Pruned evidence.' }] }] satisfies typeof original.data.message.content,
         }),
-      }, { surfaceOp: { op: 'replace', start: original.seq, end: original.seq }, sourceEventSeqs: [original.seq] })
+      }, { surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq }, sourceEventSeqs: [original.seq] })
     }
     parent.append('step/start', { turn: 1, step: 2 })
     parent.append('assistant/message', {
       turn: 1, step: 2, message: assistant([toolCall('fork-after-replacement')]),
+      stream: [],
     }, { surfaceOp: 'append' })
     const messages = parent.deriveMessages()
 
     const seed = parent.snapshotForFork()
-    const results = toolResults(seed.events.slice(seed.inheritedEventCount))
+    const results = toolResults(seed.closers)
     const child = createChild(sessions, parent, seed)
 
     expect(results.map(event => event.data.message.source.callId)).toEqual(['fork-after-replacement'])
@@ -247,6 +264,7 @@ describe('Session.snapshotForFork', () => {
     beginTurn(parent)
     parent.append('assistant/message', {
       turn: 1, step: 1, message: assistant([toolCall('first-fork')]),
+      stream: [],
     }, { surfaceOp: 'append' })
     const parentEvents = parent.snapshotEvents()
     const child = createChild(sessions, parent, parent.snapshotForFork())
@@ -255,15 +273,16 @@ describe('Session.snapshotForFork', () => {
     child.append('assistant/message', {
       turn: 2, step: 1,
       message: assistant([{ type: 'reasoning', text: 'Delegate a narrower follow-up.' }, toolCall('second-fork')]),
+      stream: [],
     }, { surfaceOp: 'append' })
     const childEvents = child.snapshotEvents()
 
     const seed = child.snapshotForFork()
     const grandchild = createChild(sessions, child, seed)
-    const newResults = toolResults(seed.events.slice(seed.inheritedEventCount))
+    const newResults = toolResults(seed.closers)
 
     expect(seed.inheritedEventCount).toBe(childEvents.length)
-    expect(seed.events.slice(0, seed.inheritedEventCount)).toEqual(childEvents)
+    expect(seed.events).toEqual(childEvents)
     expect(newResults.map(event => event.data.message.source.callId)).toEqual(['second-fork'])
     expect(toolResults(grandchild.snapshotEvents()).map(event => event.data.message.source.callId)).toEqual(['first-fork', 'second-fork'])
     expect(grandchild.deriveMessages()).toEqual([...child.deriveMessages(), ...newResults.map(event => event.data.message)])

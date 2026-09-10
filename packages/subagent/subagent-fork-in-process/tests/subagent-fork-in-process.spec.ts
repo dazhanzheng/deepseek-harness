@@ -53,12 +53,11 @@ async function setup(script: Script, maxParallelToolCalls?: number) {
   await mountAgentLoopTestDependencies(ctx)
   await mountInvariants(ctx)
   await ctx.plugin(AgentLoop, { agents: [], ...maxParallelToolCalls === undefined ? {} : { maxParallelToolCalls } })
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(fork, { providerName: 'fork' })
   const adapter = new MockAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)
-  const parent = ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
+  const parent = await ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
   return { ctx, parent, adapter }
 }
 
@@ -148,7 +147,7 @@ describe('dsh-subagent-fork-in-process', () => {
     await parent.whenIdle()
     const streaming = Promise.withResolvers<undefined>()
     ctx.on('session/event', (session, event) => {
-      if (session === parent.session && event.type === 'assistant/chunk' && event.data.turn === 2) streaming.resolve(undefined)
+      if (session === parent.session && event.type === 'step/start' && event.data.turn === 2) streaming.resolve(undefined)
     })
     parent.followup(createUserMessage({ content: [{ type: 'text', text: 'q2' }], source: { kind: 'user' } }))
     await streaming.promise

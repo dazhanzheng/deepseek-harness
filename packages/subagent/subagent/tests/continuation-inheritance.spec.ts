@@ -20,7 +20,6 @@ import SandboxPolicyService, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-p
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { queueHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import * as SubagentFork from '@deepseek-ai/dsh-subagent-fork-in-process'
 import * as SubagentSpawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
@@ -29,6 +28,7 @@ import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import SubagentRuntime from '../src/index.ts'
 import { TestSessionQuery } from './test-session-query.ts'
+import { loadStoredSession } from './persistence-helpers.ts'
 
 type Script = ConstructorParameters<typeof MockAdapter>[0]
 
@@ -44,7 +44,6 @@ async function setup(script: Script) {
   const ctx = new Context()
   contexts.push(ctx)
   await mountAgentLoopTestDependencies(ctx)
-  await ctx.plugin(SessionProjectionRegistry)
   const root = mkdtempSync(join(tmpdir(), 'dsh-continuation-inherit-'))
   roots.push(root)
   await ctx.plugin(JsonlSessionPersistence, { root })
@@ -57,7 +56,7 @@ async function setup(script: Script) {
   await ctx.plugin(SubagentFork, { providerName: 'fork' })
   const adapter = new MockAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)
-  const parent = ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
+  const parent = await ctx.agentLoop.create(SessionId('parent'), { provider: 'mock', model: 'mock' })
   return { ctx, parent, adapter }
 }
 
@@ -108,7 +107,7 @@ describe('continuable policy inheritance', () => {
     expect(ctx.approval.overrideOf(child.session)).toBe('never')
 
     await waitNoActivation(ctx, started.childId)
-    const loaded = await ctx.sessionPersistence.load(started.childId)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(policyEvents(loaded.events)).toMatchObject([
       { type: 'sandbox/mode', data: { mode: 'danger-full-access', source: 'delegation' } },
       { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
@@ -139,7 +138,7 @@ describe('continuable policy inheritance', () => {
     const started = await starting
 
     await waitNoActivation(ctx, started.childId)
-    const loaded = await ctx.sessionPersistence.load(started.childId)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(ctx.sandboxPolicy.overrideOf(parent.session)).toBe('danger-full-access')
     expect(foldedSandboxMode(ctx, started.childId, loaded.events)).toBe('read-only')
   })
@@ -150,7 +149,7 @@ describe('continuable policy inheritance', () => {
     const started = await ctx.subagents.startContinuable(startSpec(parent))
     await waitNoActivation(ctx, started.childId)
 
-    const loaded = await ctx.sessionPersistence.load(started.childId)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(policyEvents(loaded.events)).toMatchObject([
       { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
     ])
@@ -168,8 +167,7 @@ describe('continuable policy inheritance', () => {
     const started = await ctx.subagents.startContinuable(startSpec(parent, 'fork'))
     await waitNoActivation(ctx, started.childId)
 
-    const loaded = await ctx.sessionPersistence.load(started.childId)
-    expect(loaded.meta.isSeeded).toBe(true)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(loaded.inheritedEventCount).toBeGreaterThan(0)
     expect(policyEvents(loaded.events)).toMatchObject([
       { type: 'approval/policy', data: { policy: 'never', source: 'delegation' } },
@@ -193,7 +191,7 @@ describe('continuable policy inheritance', () => {
     expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')
 
     await waitNoActivation(ctx, started.childId)
-    const loaded = await ctx.sessionPersistence.load(started.childId)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(foldedSandboxMode(ctx, started.childId, loaded.events)).toBe('read-only')
   })
 
@@ -216,7 +214,7 @@ describe('continuable policy inheritance', () => {
     )
     await waitNoActivation(ctx, started.childId)
 
-    const loaded = await ctx.sessionPersistence.load(started.childId)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(loaded.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
       { data: { mode: 'read-only', source: 'delegation' } },
     ])
@@ -240,8 +238,7 @@ describe('continuable policy inheritance', () => {
     const started = await ctx.subagents.startContinuable(startSpec(parent, 'fork'))
     await waitNoActivation(ctx, started.childId)
 
-    const loaded = await ctx.sessionPersistence.load(started.childId)
-    expect(loaded.meta.isSeeded).toBe(true)
+    const loaded = await loadStoredSession(ctx.sessionPersistence, started.childId)
     expect(loaded.inheritedEventCount).toBeGreaterThan(0)
     expect(loaded.events.filter(event => event.type === 'sandbox/mode')).toMatchObject([
       { data: { mode: 'workspace-write' } },
@@ -278,7 +275,7 @@ describe('continuable policy inheritance', () => {
     await parent.whenIdle()
     expect(childId).toBeDefined()
     if (childId === undefined) throw new Error('expected a continuable fork')
-    const initial = await ctx.sessionPersistence.load(childId)
+    const initial = await loadStoredSession(ctx.sessionPersistence, childId)
     expect(initial.inheritedEventCount).toBe(parentPrefix.length)
     expect(initial.events.slice(0, initial.inheritedEventCount)).toEqual(parentPrefix)
     const own = initial.events.slice(initial.inheritedEventCount)
@@ -292,7 +289,7 @@ describe('continuable policy inheritance', () => {
       ctx.subagents, parent, childId, [{ type: 'text', text: 'continue the review' }], { kind: 'user' }, new AbortController().signal,
     )
     await waitNoActivation(ctx, childId)
-    const resumed = await ctx.sessionPersistence.load(childId)
+    const resumed = await loadStoredSession(ctx.sessionPersistence, childId)
     expect(resumed.inheritedEventCount).toBe(initial.inheritedEventCount)
     expect(resumed.events.slice(0, initial.inheritedEventCount)).toEqual(parentPrefix)
     expect(resumed.events.filter(event => event.type === 'turn/end' && event.data.reason.kind === 'forked')).toHaveLength(1)

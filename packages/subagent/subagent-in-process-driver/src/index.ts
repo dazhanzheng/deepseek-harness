@@ -112,15 +112,24 @@ export async function startInProcessRun(
 
   const childId = brandString<SessionId>(randomUUID())
   const seed = options.seed
-  const activationBoundary = SessionLogOffset(seed?.events.length ?? 0)
+  // Child-owned fork closers are part of the creation transaction, so the
+  // child's own work starts after them; `activationBoundary` is captured there.
+  let activationBoundary = SessionLogOffset(0)
 
   // Capture before the first await: a later parent switch belongs to the
   // parent's future.
   const inherited = captureDelegatedPolicyOverrides(parent)
 
   let structured: StructuredAttachment | undefined
-  const setup = (childCtx: Context): void => {
-    appendDelegatedPolicyOverrides((childCtx.agent as Agent).session, inherited)
+  const setup = (childCtx: Context, child: Agent): void => {
+    if (seed !== undefined) {
+      child.session.appendForkClosers(seed.closers)
+      // Pending parent input stays with the parent: the child inherits committed
+      // history only, so drop any inbox state folded from the seed.
+      child.inbox.clear()
+      activationBoundary = SessionLogOffset(child.session.seq)
+    }
+    appendDelegatedPolicyOverrides(child.session, inherited)
     applyChildComposition(childCtx, parent, {
       persona: request.persona,
       toolFilter: request.toolFilter,
@@ -133,6 +142,7 @@ export async function startInProcessRun(
 
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
+    parentAgent: parent,
     meta: childSessionMeta(parent, childDepth, seed !== undefined),
     ...seed === undefined ? {} : { seed: seed.events, inheritedEventCount: seed.inheritedEventCount },
     agentOptions: resolveChildAgentOptions(parent, request.agentOptions, childDepth),

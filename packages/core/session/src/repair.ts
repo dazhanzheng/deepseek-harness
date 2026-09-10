@@ -8,7 +8,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { MessageId, ToolCallId, ToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { SessionSeq } from './types.ts'
-import type { SessionEvent, SessionSeq as SessionSeqType } from './types.ts'
+import type { SessionEvent, SessionForkCloser, SessionSeq as SessionSeqType } from './types.ts'
 
 /** Recovery code for an assistant tool request that never reached a recorded call start. */
 export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED'
@@ -28,7 +28,7 @@ export const TOOL_EXECUTION_NOT_INHERITED = 'TOOL_EXECUTION_NOT_INHERITED'
  * @param events - the loaded durable log to scan (a valid committed prefix, possibly with a crash tail).
  * @returns the synthetic closer events to append after `events`, in order; empty when the log is already balanced.
  */
-export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
+export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionForkCloser[] {
   return turnClosers(events, 'interrupted')
 }
 
@@ -37,12 +37,12 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
  * @param events - the parent's committed log snapshot.
  * @returns child-only tool results and step/turn endings; empty for balanced history.
  */
-export function forkTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
+export function forkTurnClosers(events: readonly SessionEvent[]): SessionForkCloser[] {
   return turnClosers(events, 'forked')
 }
 
 /** Balance one committed tail with the outcome owned by recovery or the child snapshot. */
-function turnClosers(events: readonly SessionEvent[], kind: 'interrupted' | 'forked'): SessionEvent[] {
+function turnClosers(events: readonly SessionEvent[], kind: 'interrupted' | 'forked'): SessionForkCloser[] {
   let openTurn: number | null = null
   let openStep: number | null = null
   // Reset at each turn boundary so earlier calls cannot leak into tail repair.
@@ -102,7 +102,7 @@ function turnClosers(events: readonly SessionEvent[], kind: 'interrupted' | 'for
   // never invents a "future" time).
   let seq = last.seq + 1
   const time = last.time
-  const closers: SessionEvent[] = []
+  const closers: SessionForkCloser[] = []
 
   // Close calls before their step: providers reject dangling assistant calls,
   // and Map insertion order preserves their transcript order.
